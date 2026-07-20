@@ -83,7 +83,7 @@ Banner comment explains explicitly *why* some permissions were already set eager
 
 ### Shared helper: `set_core_permissions()`
 
-A small helper function, defined near the top of the script alongside `escape_env_double_quoted`, encapsulating the `chmod 755`/`644` logic for `BASE_DIR`/`RELEASES_DIR`/`SHARED_DIR`/release-tree that both Group 2 and Group 6 need, so the two call sites can't drift out of sync. This does not wrap entire groups in functions (script otherwise stays a flat top-to-bottom sequence) — it's scoped the same way as the existing `escape_env_double_quoted` helper.
+A small helper function encapsulating the `chmod 755`/`644` logic for `BASE_DIR`/`RELEASES_DIR`/`SHARED_DIR`/release-tree that both Group 2 and Group 6 need, so the two call sites can't drift out of sync. Since bash requires a function to be defined before its first call, and Group 2 (the first caller) runs right after Group 1, `set_core_permissions()` is defined once, right after Group 0's preflight checks and before Group 1 begins — not next to `escape_env_double_quoted`, which stays local to Group 5 where it's used exactly once. This does not wrap entire groups in functions (script otherwise stays a flat top-to-bottom sequence) — it's scoped the same narrow way as `escape_env_double_quoted`.
 
 ## Data flow
 
