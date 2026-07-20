@@ -368,6 +368,24 @@ sudo nginx -t
 echo "Reloading Nginx with SSL..."
 sudo systemctl reload nginx
 
+echo "Verifying Let's Encrypt auto-renewal..."
+# Debian's certbot package manages renewal via a systemd timer, not cron --
+# a cert nobody renews will silently expire in 90 days, so fail loudly here
+# rather than discovering it at expiry.
+if ! systemctl is-enabled --quiet certbot.timer; then
+	echo "certbot.timer is not enabled; automatic renewal will not run."
+	echo "Enable it with: sudo systemctl enable --now certbot.timer"
+	exit 1
+fi
+
+echo "Running a renewal dry run for ${LE_DOMAIN}..."
+# Proves the renewal would actually succeed right now (webroot path, vhost,
+# and cert are all still valid) rather than just confirming a schedule exists.
+if ! sudo certbot renew --dry-run --cert-name "${LE_DOMAIN}"; then
+	echo "Renewal dry run failed for ${LE_DOMAIN}. Fix the underlying issue before relying on auto-renewal."
+	exit 1
+fi
+
 # ===== GROUP 4: Create database role, database, and extensions =====
 # Independent of Nginx/SSL, so this runs after Group 3 purely to match the
 # requested group ordering -- no functional dependency between them.
