@@ -4,6 +4,11 @@
 # so partial setup does not proceed silently.
 set -euo pipefail
 
+# ===== GROUP 0: Preflight validation =====
+# Fail fast on missing preconditions before prompting for any input or
+# creating any state, so a misconfigured host is caught immediately
+# instead of mid-setup.
+
 # This bootstrap is intentionally constrained to the deployer account to keep
 # ownership and permissions predictable for future deployments.
 if [[ "$(id -un)" != "deployer" ]]; then
@@ -42,6 +47,29 @@ fi
 
 echo "Reminder: configure your domain DNS record(s) before running this setup."
 echo "Point A/AAAA records to this server first, or Let's Encrypt validation can fail."
+
+# ===== Shared helper: set_core_permissions() =====
+# Sets the structural permissions Nginx needs to read and serve the current
+# release's public/ directory: 755 on the base/releases/shared directories,
+# and conventional 755 (dirs) / 644 (files) across the first release tree.
+# Called once by Group 2 (right after the structure is created, so Group 3's
+# Let's Encrypt webroot challenge can succeed) and again by Group 6 (as part
+# of the final, authoritative permission pass) -- kept as one function so
+# the two call sites can't drift out of sync.
+set_core_permissions() {
+	sudo chmod 755 "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}"
+
+	if [[ -d "${FIRST_RELEASE_DIR}" ]]; then
+		sudo find "${FIRST_RELEASE_DIR}" -type d -exec chmod 755 {} \;
+		sudo find "${FIRST_RELEASE_DIR}" -type f -exec chmod 644 {} \;
+	fi
+}
+
+# ===== GROUP 1: Collect user's input =====
+# Gathers everything needed for the rest of the script up front: site
+# identity, Nginx/TLS naming, and Laravel database credentials. Validated
+# here, before any state is created, so a bad value fails fast rather than
+# leaving a half-provisioned site.
 
 # Primary site identifier used for directory layout and default hostnames.
 read -r -p "Site name (example: app.mysite.com): " SITE_NAME
@@ -113,10 +141,17 @@ if ! command -v psql >/dev/null 2>&1; then
 	exit 1
 fi
 
-# Atomic deployment layout:
-# - releases/: immutable timestamped releases
-# - shared/: persistent state across releases (.env, storage, logs)
-# - current: symlink to active release
+# ===== GROUP 2: Create atomic deployment structure =====
+# Builds the release/shared/current layout documented in CLAUDE.md, and
+# provisions the shared .env file that will later hold the Laravel DB_*
+# values (Group 5). Only the permissions needed for the rest of this
+# script to work are set here -- Nginx (Group 3) must be able to read and
+# serve the release's public/ directory during the Let's Encrypt webroot
+# challenge, and .env must never sit at default touch permissions even
+# while empty. Laravel runtime permissions (storage/, bootstrap/cache/)
+# aren't needed until an app is actually deployed, so those are deferred
+# to the final permission pass in Group 6.
+
 BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
@@ -148,17 +183,12 @@ sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_BOOTSTRAP_CACHE_DIR}" \
 				 "${FIRST_RELEASE_DIR}/public"
 
-# Ensure shared .env exists and set deployer+web group ownership recursively.
+# Ensure shared .env exists, lock it down immediately (even empty, it must
+# never sit at default touch permissions), then hand ownership of the whole
+# tree to deployer:www-data so the rest of this script can operate without sudo.
 sudo touch "${SHARED_ENV_FILE}"
+sudo chmod 640 "${SHARED_ENV_FILE}"
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
-
-escape_env_double_quoted() {
-	local value="$1"
-	value="${value//\\/\\\\}"
-	value="${value//\"/\\\"}"
-	value="${value//\$/\\$}"
-	printf '%s' "$value"
-}
 
 # Initialize current symlink only if absent (preserves existing deployments).
 if [[ ! -L "${CURRENT_LINK}" ]]; then
@@ -173,72 +203,16 @@ ln -sfn "${SHARED_STORAGE_DIR}" "${FIRST_RELEASE_DIR}/storage"
 ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${FIRST_RELEASE_DIR}/bootstrap/cache"
 ln -sfn "${SHARED_ENV_FILE}" "${FIRST_RELEASE_DIR}/.env"
 
-echo "Setting Laravel directory permissions..."
-# Base directories are traversable by web server and deploy user.
-sudo chmod 755 "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}"
+echo "Setting core deployment permissions..."
+# Nginx (running as www-data) must be able to traverse and read the release's
+# public/ directory before Group 3 requests a Let's Encrypt certificate.
+set_core_permissions
 
-if [[ -d "${FIRST_RELEASE_DIR}" ]]; then
-	# Conventional release permissions: dirs 755, files 644.
-	sudo find "${FIRST_RELEASE_DIR}" -type d -exec chmod 755 {} \;
-	sudo find "${FIRST_RELEASE_DIR}" -type f -exec chmod 644 {} \;
-fi
-
-# Shared writable runtime paths use setgid (2xxx) so new files inherit web group.
-sudo find "${SHARED_STORAGE_DIR}" -type d -exec chmod 2775 {} \;
-sudo find "${SHARED_STORAGE_DIR}" -type f -exec chmod 664 {} \;
-sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type d -exec chmod 2775 {} \;
-sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type f -exec chmod 664 {} \;
-sudo chmod 2775 "${SHARED_DIR}/logs" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}"
-# .env stays owner/group readable only.
-sudo chmod 640 "${SHARED_ENV_FILE}"
-
-echo "Provisioning PostgreSQL database ${DB_DATABASE} for role ${DB_USERNAME}..."
-
-sudo -u postgres psql -v ON_ERROR_STOP=1 \
-	--set=db_name="${DB_DATABASE}" \
-	--set=db_user="${DB_USERNAME}" \
-	--set=db_password="${DB_PASSWORD}" <<'SQL'
-DO $$
-BEGIN
-	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') THEN
-		EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password');
-	ELSE
-		EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password');
-	END IF;
-END
-$$;
-
-SELECT format('CREATE DATABASE %I OWNER %I ENCODING ''UTF8''', :'db_name', :'db_user')
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name')
-\gexec
-
-SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user')
-\gexec
-SQL
-
-sudo -u postgres psql -v ON_ERROR_STOP=1 --dbname="${DB_DATABASE}" <<'SQL'
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-SQL
-
-echo "Updating shared Laravel environment file..."
-
-TMP_ENV_FILE="$(mktemp)"
-
-grep -Ev '^(DB_CONNECTION|DB_HOST|DB_PORT|DB_DATABASE|DB_USERNAME|DB_PASSWORD)=' "${SHARED_ENV_FILE}" > "${TMP_ENV_FILE}" || true
-
-cat <<EOF >> "${TMP_ENV_FILE}"
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=${DB_DATABASE}
-DB_USERNAME=${DB_USERNAME}
-DB_PASSWORD="$(escape_env_double_quoted "${DB_PASSWORD}")"
-EOF
-
-mv "${TMP_ENV_FILE}" "${SHARED_ENV_FILE}"
-chown deployer:"${WEB_GROUP}" "${SHARED_ENV_FILE}"
-chmod 640 "${SHARED_ENV_FILE}"
+# ===== GROUP 3: Configure Nginx server and issue Let's Encrypt SSL =====
+# Depends on Group 2 having already made current/public readable by
+# www-data. Writes an HTTP-only vhost first (so certbot's webroot challenge
+# has somewhere to serve the ACME token from), then rewrites it to a dual
+# HTTP+HTTPS vhost once the certificate exists.
 
 NGINX_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}.conf"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
@@ -393,6 +367,98 @@ sudo nginx -t
 
 echo "Reloading Nginx with SSL..."
 sudo systemctl reload nginx
+
+# ===== GROUP 4: Create database role, database, and extensions =====
+# Independent of Nginx/SSL, so this runs after Group 3 purely to match the
+# requested group ordering -- no functional dependency between them.
+
+echo "Provisioning PostgreSQL database ${DB_DATABASE} for role ${DB_USERNAME}..."
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 \
+	--set=db_name="${DB_DATABASE}" \
+	--set=db_user="${DB_USERNAME}" \
+	--set=db_password="${DB_PASSWORD}" <<'SQL'
+DO $$
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') THEN
+		EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password');
+	ELSE
+		EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password');
+	END IF;
+END
+$$;
+
+SELECT format('CREATE DATABASE %I OWNER %I ENCODING ''UTF8''', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name')
+\gexec
+
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user')
+\gexec
+SQL
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 --dbname="${DB_DATABASE}" <<'SQL'
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+SQL
+
+# ===== GROUP 5: Create/update shared .env file =====
+# Writes the DB_* values collected in Group 1 and provisioned in Group 4
+# into the shared .env file created in Group 2, replacing any prior DB_*
+# lines while preserving everything else. Immediately re-locks .env down
+# to 640 after rewriting it, since it now holds the plaintext DB password.
+
+escape_env_double_quoted() {
+	local value="$1"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//\$/\\$}"
+	printf '%s' "$value"
+}
+
+echo "Updating shared Laravel environment file..."
+
+TMP_ENV_FILE="$(mktemp)"
+
+grep -Ev '^(DB_CONNECTION|DB_HOST|DB_PORT|DB_DATABASE|DB_USERNAME|DB_PASSWORD)=' "${SHARED_ENV_FILE}" > "${TMP_ENV_FILE}" || true
+
+cat <<EOF >> "${TMP_ENV_FILE}"
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=${DB_DATABASE}
+DB_USERNAME=${DB_USERNAME}
+DB_PASSWORD="$(escape_env_double_quoted "${DB_PASSWORD}")"
+EOF
+
+mv "${TMP_ENV_FILE}" "${SHARED_ENV_FILE}"
+chown deployer:"${WEB_GROUP}" "${SHARED_ENV_FILE}"
+chmod 640 "${SHARED_ENV_FILE}"
+
+# ===== GROUP 6: Check and update permissions (final pass) =====
+# The authoritative permission pass, run last. Groups 2 and 5 already set
+# the minimum permissions needed for Nginx to serve the site and for .env
+# to never sit exposed -- this group re-asserts those (catching any drift)
+# and, for the first time, sets the Laravel runtime permissions that only
+# matter once an application is actually deployed onto this structure.
+
+echo "Performing final permission check and update..."
+
+# Re-assert ownership across the entire deployment tree in case anything drifted.
+sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
+
+# Re-assert the core structural permissions set in Group 2.
+set_core_permissions
+
+# Shared writable runtime paths use setgid (2xxx) so new files inherit web group.
+# Not required for this script's own execution, so it's deferred here.
+sudo find "${SHARED_STORAGE_DIR}" -type d -exec chmod 2775 {} \;
+sudo find "${SHARED_STORAGE_DIR}" -type f -exec chmod 664 {} \;
+sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type d -exec chmod 2775 {} \;
+sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type f -exec chmod 664 {} \;
+sudo chmod 2775 "${SHARED_DIR}/logs" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}"
+
+# .env holds the plaintext DB password -- keep it owner/group readable only.
+sudo chmod 640 "${SHARED_ENV_FILE}"
 
 # Final setup summary for quick verification and handoff notes.
 echo "Done."
