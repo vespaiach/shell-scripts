@@ -1,3 +1,38 @@
+# Atomic Deployment Script Grouping Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Reorganize `debian-13/atomic-deployment-setup.sh` into 7 clearly banner-commented, ordered groups (preflight, input, structure, nginx+SSL, database, env, final permissions), split permission-setting between a minimal early subset and a comprehensive final pass, and add a post-issuance Let's Encrypt renewal verification step.
+
+**Architecture:** Single flat bash script, top-to-bottom execution, no functions except two small helpers (`set_core_permissions`, `escape_env_double_quoted`). No new files. This is a structural/comment refactor of one existing file — behavior stays identical except for the two additive changes: the Group 3/Group 4 reorder (confirmed independent) and the new renewal verification.
+
+**Tech Stack:** Bash (`set -euo pipefail`), `sudo`, `nginx`, `certbot`, `psql`, `systemctl`.
+
+## Global Constraints
+
+- The only verification tooling in this repo is `bash -n` syntax checking (per `CLAUDE.md`) — there is no test framework to add.
+- `set -euo pipefail` must remain in effect for the whole script.
+- Identifiers interpolated into SQL or shell (site name, DB name, DB username) must stay validated against their existing regexes before use — do not relax or move validation earlier/later than the value's own prompt.
+- Generated files (Nginx configs, `.env`) must keep the write-to-`mktemp`-then-move pattern — never edit destination files in place.
+- `atomic-deployment-setup.sh` must keep enforcing that it's run as the `deployer` user.
+- No change to SQL, Nginx config content, prompt text, or validation regexes — only reordering, comments, the permission-timing split, and the new renewal check (per the approved spec at `docs/superpowers/specs/2026-07-20-atomic-deployment-grouping-design.md`).
+
+---
+
+### Task 1: Reorganize the script into 7 commented groups with the permission split
+
+**Files:**
+- Modify: `debian-13/atomic-deployment-setup.sh` (full rewrite, same file)
+
+**Interfaces:**
+- Produces: `set_core_permissions()` — a no-argument bash function, defined right after Group 0 and before Group 1, that reads the global vars `BASE_DIR`, `RELEASES_DIR`, `SHARED_DIR`, `FIRST_RELEASE_DIR` (all set in Group 2) and applies `chmod 755` to the base/releases/shared dirs plus `755`/`644` (dirs/files) across `FIRST_RELEASE_DIR`. Called once in Group 2 and once in Group 6.
+- Produces: The exact anchor text `echo "Reloading Nginx with SSL..."` followed by `sudo systemctl reload nginx` as the last two lines of Group 3 — Task 2 inserts the renewal verification block immediately after this pair.
+
+- [ ] **Step 1: Write the complete reorganized script**
+
+Replace the entire contents of `debian-13/atomic-deployment-setup.sh` with:
+
+```bash
 #!/usr/bin/env bash
 
 # Exit on error (-e), undefined variable (-u), and failed pipeline segment (pipefail)
@@ -368,24 +403,6 @@ sudo nginx -t
 echo "Reloading Nginx with SSL..."
 sudo systemctl reload nginx
 
-echo "Verifying Let's Encrypt auto-renewal..."
-# Debian's certbot package manages renewal via a systemd timer, not cron --
-# a cert nobody renews will silently expire in 90 days, so fail loudly here
-# rather than discovering it at expiry.
-if ! systemctl is-enabled --quiet certbot.timer; then
-	echo "certbot.timer is not enabled; automatic renewal will not run."
-	echo "Enable it with: sudo systemctl enable --now certbot.timer"
-	exit 1
-fi
-
-echo "Running a renewal dry run for ${LE_DOMAIN}..."
-# Proves the renewal would actually succeed right now (webroot path, vhost,
-# and cert are all still valid) rather than just confirming a schedule exists.
-if ! sudo certbot renew --dry-run --cert-name "${LE_DOMAIN}"; then
-	echo "Renewal dry run failed for ${LE_DOMAIN}. Fix the underlying issue before relying on auto-renewal."
-	exit 1
-fi
-
 # ===== GROUP 4: Create database role, database, and extensions =====
 # Independent of Nginx/SSL, so this runs after Group 3 purely to match the
 # requested group ordering -- no functional dependency between them.
@@ -490,3 +507,128 @@ echo "Laravel database user: ${DB_USERNAME}"
 echo "Shared env file: ${SHARED_ENV_FILE}"
 echo "Permission summary:"
 sudo stat -c '%a %U:%G %n' "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}" "${SHARED_ENV_FILE}"
+```
+
+- [ ] **Step 2: Verify syntax**
+
+Run: `bash -n debian-13/atomic-deployment-setup.sh`
+Expected: no output, exit code 0.
+
+- [ ] **Step 3: Verify no unintended content changes**
+
+Run each of these and confirm a match (all of this content must be byte-identical to the pre-refactor script — only its position in the file changed):
+
+```bash
+grep -nF "CREATE ROLE %I LOGIN PASSWORD %L" debian-13/atomic-deployment-setup.sh
+grep -nF "ssl_protocols TLSv1.2 TLSv1.3;" debian-13/atomic-deployment-setup.sh
+grep -nF 'location ~ /\.(?!well-known).* {' debian-13/atomic-deployment-setup.sh
+grep -nF "Laravel PostgreSQL database name:" debian-13/atomic-deployment-setup.sh
+grep -c "GROUP [0-6]:" debian-13/atomic-deployment-setup.sh
+```
+Expected: the first four each print exactly one matching line; the last prints `7` (one banner per group, Group 0 through Group 6).
+
+- [ ] **Step 4: Confirm the Group 3/Group 4 order and the Group 2 permission subset**
+
+```bash
+grep -n "GROUP 3: Configure Nginx" debian-13/atomic-deployment-setup.sh
+grep -n "GROUP 4: Create database role" debian-13/atomic-deployment-setup.sh
+grep -n "chmod 2775" debian-13/atomic-deployment-setup.sh
+```
+Expected: the Group 3 line number is lower than the Group 4 line number; the `chmod 2775` matches only appear after the `GROUP 6` banner line (confirm by comparing line numbers), not between Group 2 and Group 3.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add debian-13/atomic-deployment-setup.sh
+git commit -m "$(cat <<'EOF'
+Reorganize atomic-deployment-setup.sh into commented groups
+
+Splits the script into 7 banner-commented phases (preflight, input,
+structure, nginx+SSL, database, env, final permissions), reorders
+database provisioning to after Nginx/SSL, and splits permission-setting
+between a minimal early subset (Group 2, needed for the Let's Encrypt
+webroot challenge and .env secret hygiene) and a comprehensive final
+pass (Group 6), via a new shared set_core_permissions() helper.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 2: Add post-issuance Let's Encrypt renewal verification
+
+**Files:**
+- Modify: `debian-13/atomic-deployment-setup.sh:Group 3` (the file produced by Task 1)
+
+**Interfaces:**
+- Consumes: The exact anchor lines `echo "Reloading Nginx with SSL..."` / `sudo systemctl reload nginx` at the end of Group 3, produced by Task 1.
+- Consumes: `${LE_DOMAIN}`, set in Group 1.
+
+- [ ] **Step 1: Insert the renewal verification block**
+
+Using the Edit tool on `debian-13/atomic-deployment-setup.sh`, find this exact text (the last two lines of Group 3 as written by Task 1):
+
+```
+echo "Reloading Nginx with SSL..."
+sudo systemctl reload nginx
+```
+
+Replace it with:
+
+```
+echo "Reloading Nginx with SSL..."
+sudo systemctl reload nginx
+
+echo "Verifying Let's Encrypt auto-renewal..."
+# Debian's certbot package manages renewal via a systemd timer, not cron --
+# a cert nobody renews will silently expire in 90 days, so fail loudly here
+# rather than discovering it at expiry.
+if ! systemctl is-enabled --quiet certbot.timer; then
+	echo "certbot.timer is not enabled; automatic renewal will not run."
+	echo "Enable it with: sudo systemctl enable --now certbot.timer"
+	exit 1
+fi
+
+echo "Running a renewal dry run for ${LE_DOMAIN}..."
+# Proves the renewal would actually succeed right now (webroot path, vhost,
+# and cert are all still valid) rather than just confirming a schedule exists.
+if ! sudo certbot renew --dry-run --cert-name "${LE_DOMAIN}"; then
+	echo "Renewal dry run failed for ${LE_DOMAIN}. Fix the underlying issue before relying on auto-renewal."
+	exit 1
+fi
+```
+
+(This must land before the `# ===== GROUP 4: ...` banner — it stays inside Group 3.)
+
+- [ ] **Step 2: Verify syntax**
+
+Run: `bash -n debian-13/atomic-deployment-setup.sh`
+Expected: no output, exit code 0.
+
+- [ ] **Step 3: Verify the new block is present and correctly scoped**
+
+```bash
+grep -nF "certbot.timer" debian-13/atomic-deployment-setup.sh
+grep -nF "certbot renew --dry-run --cert-name" debian-13/atomic-deployment-setup.sh
+grep -nF "GROUP 4: Create database role" debian-13/atomic-deployment-setup.sh
+```
+Expected: the `certbot.timer` and `certbot renew --dry-run` line numbers are both lower than the `GROUP 4` banner's line number (i.e. the renewal check runs inside Group 3, before database provisioning).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add debian-13/atomic-deployment-setup.sh
+git commit -m "$(cat <<'EOF'
+Verify Let's Encrypt auto-renewal after certificate issuance
+
+Checks certbot.timer is enabled and runs a renewal dry run for the
+issued domain immediately after the HTTPS vhost reload, so a broken
+auto-renewal setup is caught at deploy time instead of silently
+expiring the certificate 90 days later.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+EOF
+)"
+```
