@@ -28,7 +28,7 @@ This split is deliberate and should be preserved when editing any of these scrip
   current -> releases/<timestamp>  # symlink flipped on deploy; Nginx root always points here
 ```
 
-`current` is only created if absent, so re-running the script against an existing site does not clobber an active deployment.
+Re-running the script against an existing site does not clobber an active deployment. If `current` already resolves to a directory, that release is *adopted* — `ACTIVE_RELEASE_DIR` is set to it, `current` is left pointing where it was, and no new release directory is minted. Everything downstream (the permission passes, the ACME webroot, the final summary) works off `ACTIVE_RELEASE_DIR`, so it always describes the release Nginx is actually serving. A dangling `current` counts as no deployment; a `current` that exists but is *not* a symlink is refused outright, because `ln -sfn` would silently create the link inside it rather than replace it.
 
 ## Working with these scripts
 
