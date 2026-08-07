@@ -51,7 +51,10 @@ echo "Point A/AAAA records to this server first, or Let's Encrypt validation can
 # ===== Shared helper: set_core_permissions() =====
 # Sets the structural permissions Nginx needs to read and serve the current
 # release's public/ directory: 755 on the base/releases/shared directories,
-# and conventional 755 (dirs) / 644 (files) across the first release tree.
+# and conventional 755 (dirs) / 644 (files) across the active release tree.
+# Operates on ACTIVE_RELEASE_DIR -- the release current/ actually resolves to
+# -- so a re-run permissions the tree Nginx is serving, not a freshly minted
+# directory nothing points at.
 # Called once by Group 2 (right after the structure is created, so Group 3's
 # Let's Encrypt webroot challenge can succeed) and again by Group 6 (as part
 # of the final, authoritative permission pass) -- kept as one function so
@@ -59,9 +62,9 @@ echo "Point A/AAAA records to this server first, or Let's Encrypt validation can
 set_core_permissions() {
 	sudo chmod 755 "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}"
 
-	if [[ -d "${FIRST_RELEASE_DIR}" ]]; then
-		sudo find "${FIRST_RELEASE_DIR}" -type d -exec chmod 755 {} \;
-		sudo find "${FIRST_RELEASE_DIR}" -type f -exec chmod 644 {} \;
+	if [[ -d "${ACTIVE_RELEASE_DIR}" ]]; then
+		sudo find "${ACTIVE_RELEASE_DIR}" -type d -exec chmod 755 {} \;
+		sudo find "${ACTIVE_RELEASE_DIR}" -type f -exec chmod 644 {} \;
 	fi
 }
 
@@ -156,8 +159,6 @@ BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
-TIMESTAMP="$(date +%Y%m%d%H%M%S)"
-FIRST_RELEASE_DIR="${RELEASES_DIR}/${TIMESTAMP}"
 SHARED_STORAGE_DIR="${SHARED_DIR}/storage"
 SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
 SHARED_ENV_FILE="${SHARED_DIR}/.env"
@@ -170,8 +171,31 @@ if ! getent group "${WEB_GROUP}" >/dev/null 2>&1; then
 	exit 1
 fi
 
+# A non-symlink at current/ is not a layout this script can safely repoint:
+# 'ln -sfn' does not overwrite a real directory, it silently creates the link
+# *inside* it, leaving current/ still not pointing at a release.
+if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
+	echo "${CURRENT_LINK} exists but is not a symlink."
+	echo "Move it aside before running this script."
+	exit 1
+fi
+
+# Re-running against a site that already has a live deployment must not mint an
+# orphan release directory or repoint current/. Adopt whatever current/ resolves
+# to instead, so the permission passes, the ACME webroot, and the final summary
+# all describe the release Nginx is actually serving. A dangling current/ counts
+# as no deployment and is repointed below.
+if [[ -L "${CURRENT_LINK}" && -d "${CURRENT_LINK}" ]]; then
+	ADOPTED_EXISTING_RELEASE=1
+	ACTIVE_RELEASE_DIR="$(cd "${CURRENT_LINK}" && pwd -P)"
+	echo "Existing deployment detected; adopting current release ${ACTIVE_RELEASE_DIR}."
+else
+	ADOPTED_EXISTING_RELEASE=0
+	ACTIVE_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
+fi
+
 echo "Creating atomic deployment structure in ${BASE_DIR}..."
-# Create full directory skeleton, including first empty release public/ path so
+# Create full directory skeleton, including the active release's public/ path so
 # Nginx can serve ACME challenge files immediately.
 sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_DIR}/logs" \
@@ -181,7 +205,7 @@ sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_STORAGE_DIR}/framework/views" \
 				 "${SHARED_STORAGE_DIR}/logs" \
 				 "${SHARED_BOOTSTRAP_CACHE_DIR}" \
-				 "${FIRST_RELEASE_DIR}/public"
+				 "${ACTIVE_RELEASE_DIR}/public"
 
 # Ensure shared .env exists, lock it down immediately (even empty, it must
 # never sit at default touch permissions), then hand ownership of the whole
@@ -190,18 +214,21 @@ sudo touch "${SHARED_ENV_FILE}"
 sudo chmod 640 "${SHARED_ENV_FILE}"
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
 
-# Initialize current symlink only if absent (preserves existing deployments).
-if [[ ! -L "${CURRENT_LINK}" ]]; then
-	ln -sfn "${FIRST_RELEASE_DIR}" "${CURRENT_LINK}"
+# Point current/ at this run's release and wire its release-local paths to the
+# shared tree. Skipped entirely when an existing deployment was adopted: that
+# release is live and already wired, and blindly re-linking over a real
+# directory would nest the symlink inside it rather than replace it.
+if [[ "${ADOPTED_EXISTING_RELEASE}" -eq 0 ]]; then
+	ln -sfn "${ACTIVE_RELEASE_DIR}" "${CURRENT_LINK}"
+
+	# Bootstrap tree is commonly expected by Laravel for cache symlink target.
+	mkdir -p "${ACTIVE_RELEASE_DIR}/bootstrap"
+
+	# Link release-local paths to persistent shared targets.
+	ln -sfn "${SHARED_STORAGE_DIR}" "${ACTIVE_RELEASE_DIR}/storage"
+	ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${ACTIVE_RELEASE_DIR}/bootstrap/cache"
+	ln -sfn "${SHARED_ENV_FILE}" "${ACTIVE_RELEASE_DIR}/.env"
 fi
-
-# Bootstrap tree is commonly expected by Laravel for cache symlink target.
-mkdir -p "${FIRST_RELEASE_DIR}/bootstrap"
-
-# Link release-local paths to persistent shared targets.
-ln -sfn "${SHARED_STORAGE_DIR}" "${FIRST_RELEASE_DIR}/storage"
-ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${FIRST_RELEASE_DIR}/bootstrap/cache"
-ln -sfn "${SHARED_ENV_FILE}" "${FIRST_RELEASE_DIR}/.env"
 
 echo "Setting core deployment permissions..."
 # Nginx (running as www-data) must be able to traverse and read the release's
@@ -217,6 +244,15 @@ set_core_permissions
 NGINX_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}.conf"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
 PHP_FPM_SOCK="/run/php/php8.5-fpm.sock"
+
+# This vhost serves certbot's HTTP-01 challenge, so the certificate domain must
+# be a name Nginx routes here -- otherwise the ACME request falls through to the
+# default server and validation 404s. It is also the name the issued certificate
+# is valid for, so it has to be served by the HTTPS block as well.
+SERVER_NAMES="${SERVER_NAME}"
+if [[ "${LE_DOMAIN}" != "${SERVER_NAME}" ]]; then
+	SERVER_NAMES="${SERVER_NAME} ${LE_DOMAIN}"
+fi
 
 # Prefer expected PHP-FPM socket; fall back to first detected socket on system.
 if [[ ! -S "${PHP_FPM_SOCK}" ]]; then
@@ -238,7 +274,7 @@ cat > "${TMP_NGINX_CONFIG}" <<EOF
 server {
 	listen 80;
 	listen [::]:80;
-	server_name ${SERVER_NAME};
+	server_name ${SERVER_NAMES};
 	root ${CURRENT_LINK}/public;
 	server_tokens off;
 
@@ -257,8 +293,11 @@ server {
 }
 EOF
 
-# Enable site by linking from sites-available into sites-enabled.
+# Enable site by linking from sites-available into sites-enabled. mktemp creates
+# the file 0600, which survives the move -- reset it to the 0644 convention so
+# the vhost is readable to an admin inspecting sites-available as a normal user.
 sudo mv "${TMP_NGINX_CONFIG}" "${NGINX_AVAILABLE}"
+sudo chmod 644 "${NGINX_AVAILABLE}"
 sudo ln -sfn "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
 
 echo "Testing Nginx configuration..."
@@ -285,7 +324,7 @@ cat > "${TMP_NGINX_SSL_CONFIG}" <<EOF
 server {
 	listen 80;
 	listen [::]:80;
-	server_name ${SERVER_NAME};
+	server_name ${SERVER_NAMES};
 	root ${CURRENT_LINK}/public;
 	server_tokens off;
 
@@ -304,9 +343,10 @@ server {
 }
 
 server {
-	listen 443 ssl http2;
-	listen [::]:443 ssl http2;
-	server_name ${SERVER_NAME};
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	http2 on;
+	server_name ${SERVER_NAMES};
 	root ${CURRENT_LINK}/public;
 	server_tokens off;
 
@@ -347,10 +387,16 @@ server {
 	}
 
 	# Cache static assets aggressively; deploys are content-addressed by release path.
+	# Nginx stops inheriting the server-level add_header directives as soon as a
+	# location defines one of its own, so the security headers are repeated here
+	# or static assets would be served without them.
 	location ~* \.(?:css|js|jpg|jpeg|gif|png|webp|svg|ico|ttf|otf|woff|woff2)$ {
 		expires 7d;
 		access_log off;
 		add_header Cache-Control "public, immutable";
+		add_header X-Frame-Options "SAMEORIGIN" always;
+		add_header X-Content-Type-Options "nosniff" always;
+		add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 	}
 
 	# Block access to hidden files except ACME challenge directory.
@@ -361,6 +407,7 @@ server {
 EOF
 
 sudo mv "${TMP_NGINX_SSL_CONFIG}" "${NGINX_AVAILABLE}"
+sudo chmod 644 "${NGINX_AVAILABLE}"
 
 echo "Testing Nginx configuration with SSL..."
 sudo nginx -t
@@ -370,41 +417,62 @@ sudo systemctl reload nginx
 
 echo "Verifying Let's Encrypt auto-renewal..."
 # Debian's certbot package manages renewal via a systemd timer, not cron --
-# a cert nobody renews will silently expire in 90 days, so fail loudly here
-# rather than discovering it at expiry.
+# a cert nobody renews will silently expire in 90 days, so this still fails the
+# run loudly. It records the failure rather than exiting here, though: renewal
+# is orthogonal to the database, .env, and final permission passes below, and
+# aborting mid-script would leave the site provisioned but unusable. The
+# recorded result is reported and exited on at the very end.
+RENEWAL_VERIFIED=1
+
 if ! systemctl is-enabled --quiet certbot.timer; then
-	echo "certbot.timer is not enabled; automatic renewal will not run."
+	echo "Warning: certbot.timer is not enabled; automatic renewal will not run."
 	echo "Enable it with: sudo systemctl enable --now certbot.timer"
-	exit 1
+	RENEWAL_VERIFIED=0
 fi
 
 echo "Running a renewal dry run for ${LE_DOMAIN}..."
 # Proves the renewal would actually succeed right now (webroot path, vhost,
 # and cert are all still valid) rather than just confirming a schedule exists.
 if ! sudo certbot renew --dry-run --cert-name "${LE_DOMAIN}"; then
-	echo "Renewal dry run failed for ${LE_DOMAIN}. Fix the underlying issue before relying on auto-renewal."
-	exit 1
+	echo "Warning: renewal dry run failed for ${LE_DOMAIN}."
+	RENEWAL_VERIFIED=0
 fi
 
 # ===== GROUP 4: Create database role, database, and extensions =====
 # Independent of Nginx/SSL, so this runs after Group 3 purely to match the
 # requested group ordering -- no functional dependency between them.
 
+# Escape a value for use inside single quotes in a psql backslash-command
+# argument: psql unescapes \\ and \' there, so both have to be backslashed.
+escape_psql_single_quoted() {
+	local value="$1"
+	# A literal single quote cannot be written inline in the pattern here --
+	# bash consumes it as an opening quote -- so it goes through a variable.
+	local single_quote="'"
+	value="${value//\\/\\\\}"
+	value="${value//"${single_quote}"/\\"${single_quote}"}"
+	printf '%s' "$value"
+}
+
 echo "Provisioning PostgreSQL database ${DB_DATABASE} for role ${DB_USERNAME}..."
 
-sudo -u postgres psql -v ON_ERROR_STOP=1 \
-	--set=db_name="${DB_DATABASE}" \
-	--set=db_user="${DB_USERNAME}" \
-	--set=db_password="${DB_PASSWORD}" <<'SQL'
-DO $$
-BEGIN
-	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') THEN
-		EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password');
-	ELSE
-		EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password');
-	END IF;
-END
-$$;
+# The role/database DDL is built with format() and run through \gexec rather
+# than a DO block: psql does not interpolate :'variables' inside dollar-quoted
+# strings, so :'db_user' inside DO $$ ... $$ would reach the server verbatim and
+# fail with a syntax error.
+#
+# db_name and db_user are validated identifiers and safe to pass as arguments,
+# but the password is fed in over stdin via \set -- anything in argv is readable
+# by any local user in /proc/<pid>/cmdline for as long as psql runs.
+{
+	printf '\\set db_password %s\n' "'$(escape_psql_single_quoted "${DB_PASSWORD}")'"
+	cat <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user')
+\gexec
+
+SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password')
+\gexec
 
 SELECT format('CREATE DATABASE %I OWNER %I ENCODING ''UTF8''', :'db_name', :'db_user')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name')
@@ -413,6 +481,9 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name')
 SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user')
 \gexec
 SQL
+} | sudo -u postgres psql -v ON_ERROR_STOP=1 \
+	--set=db_name="${DB_DATABASE}" \
+	--set=db_user="${DB_USERNAME}"
 
 sudo -u postgres psql -v ON_ERROR_STOP=1 --dbname="${DB_DATABASE}" <<'SQL'
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -449,8 +520,12 @@ DB_PASSWORD="$(escape_env_double_quoted "${DB_PASSWORD}")"
 EOF
 
 mv "${TMP_ENV_FILE}" "${SHARED_ENV_FILE}"
-chown deployer:"${WEB_GROUP}" "${SHARED_ENV_FILE}"
-chmod 640 "${SHARED_ENV_FILE}"
+# The moved temp file carries deployer's primary group, not the web group, so
+# the group has to be reset for PHP-FPM to read .env. This needs sudo: a
+# non-root owner can only chgrp to a group it belongs to, and nothing in this
+# repo's setup scripts adds deployer to ${WEB_GROUP}.
+sudo chown deployer:"${WEB_GROUP}" "${SHARED_ENV_FILE}"
+sudo chmod 640 "${SHARED_ENV_FILE}"
 
 # ===== GROUP 6: Check and update permissions (final pass) =====
 # The authoritative permission pass, run last. Groups 2 and 5 already set
@@ -482,11 +557,21 @@ sudo chmod 640 "${SHARED_ENV_FILE}"
 echo "Done."
 echo "Site: ${SITE_NAME}"
 echo "Base directory: ${BASE_DIR}"
-echo "Current release: ${FIRST_RELEASE_DIR}"
-echo "Nginx server_name: ${SERVER_NAME}"
+echo "Current release: ${ACTIVE_RELEASE_DIR}"
+echo "Nginx server_name: ${SERVER_NAMES}"
 echo "Let's Encrypt domain: ${LE_DOMAIN}"
 echo "Laravel database: ${DB_DATABASE}"
 echo "Laravel database user: ${DB_USERNAME}"
 echo "Shared env file: ${SHARED_ENV_FILE}"
 echo "Permission summary:"
 sudo stat -c '%a %U:%G %n' "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}" "${SHARED_ENV_FILE}"
+
+# Deferred from Group 3: the site is fully provisioned either way, but an
+# unverified renewal path means the certificate silently expires in 90 days,
+# so that still exits non-zero.
+if [[ "${RENEWAL_VERIFIED}" -ne 1 ]]; then
+	echo
+	echo "Setup completed, but Let's Encrypt auto-renewal could not be verified."
+	echo "Fix the renewal warnings above before relying on automatic renewal."
+	exit 1
+fi
