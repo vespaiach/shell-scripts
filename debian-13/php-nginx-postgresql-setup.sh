@@ -308,7 +308,7 @@ SUDOERS_FILE="/etc/sudoers.d/90-${DEPLOYER_USER}"
 # A drop-in is only honoured if the main sudoers file pulls the directory in.
 # Without this check the grant below would appear to succeed and silently do
 # nothing, leaving deployer with an unusable password-prompting sudo.
-if ! sudo grep -Eq '^[[:space:]]*[@#]includedir[[:space:]]+/etc/sudoers\.d[[:space:]]*$' /etc/sudoers; then
+if ! sudo grep -Eq '^[[:space:]]*[@#]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]*(#.*)?)?$' /etc/sudoers; then
 	echo "/etc/sudoers does not include /etc/sudoers.d; refusing to write a drop-in that would be ignored." >&2
 	exit 1
 fi
