@@ -116,6 +116,31 @@ fi
 # Step 3: Install Nginx web server.
 # ****************************************************************************************************
 
+# Debian images commonly ship with Apache pre-installed and already bound to
+# port 80, which would make Nginx fail to start. Check for that here and stop
+# Apache before installing Nginx rather than letting the install succeed and
+# the service fail silently afterward.
+if sudo ss -ltnp 2>/dev/null | grep -q ':80[[:space:]]'; then
+	echo "Port 80 is already in use."
+
+	if systemctl is-active --quiet apache2; then
+		echo "Stopping and disabling Apache so Nginx can bind to port 80..."
+		sudo systemctl disable --now apache2
+	fi
+
+	# Re-check rather than assume: something other than Apache may be holding
+	# the port, and that has to be resolved by the operator, not this script.
+	if sudo ss -ltnp 2>/dev/null | grep -q ':80[[:space:]]'; then
+		echo "Port 80 is still in use by a process other than Apache; free it before continuing." >&2
+		sudo ss -ltnp | grep ':80[[:space:]]' >&2
+		exit 1
+	fi
+
+	echo "Port 80 is now available."
+else
+	echo "Port 80 is available."
+fi
+
 # Install Nginx web server.
 sudo apt install -y nginx
 
