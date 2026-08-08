@@ -27,7 +27,7 @@ consumes them.
   prompts for what it needs, every time, even if a sibling script just asked for the
   same value. Simpler and more predictable than partial state-sharing.
 - No shared helper library between the three scripts. Each is fully self-contained,
-  including small duplicated helpers (escaping functions, the deployer-user check),
+  including small duplicated helpers (escaping functions, the sudo-capability check),
   so any one of the three can be copied and run elsewhere without its siblings.
 - No top-level wrapper script. `atomic-deployment-setup.sh` is retired outright. The
   three new scripts are the entire interface.
@@ -49,7 +49,12 @@ debian-13/deployment/
 database name, username, password (written into `.env` only — this script never
 touches Postgres itself).
 
-**Preflight:** `deployer` user check; sudo present and usable; `www-data` group exists.
+**Preflight:** sudo present and usable (`sudo -n true`, falling back to an interactive
+`sudo true` prompt); `www-data` group exists. No check on *which* user is running the
+script — only that they can sudo. Ownership written to disk stays hardcoded to
+`deployer:www-data` regardless of the executing user, matching the account the base
+setup script provisions and the `www-data` web-server group — this is about loosening
+who may *run* the script, not about changing who *owns* the resulting files.
 
 **Does**, in order:
 1. Validate `current` is either absent, a dangling symlink, or a symlink to a real
@@ -83,10 +88,10 @@ repeatable. This makes the script usable on its own just to rotate DB credential
 **Prompts:** site name; Nginx server name (default: site name); Let's Encrypt
 certificate domain (default: site name); Let's Encrypt notification email.
 
-**Preflight:** `deployer` user check; sudo present and usable; `nginx -t` passes;
-certbot present; **`${BASE_DIR}/current/public` must already exist** — if not, exit
-with a message telling the operator to run `structure-setup.sh` for this site first,
-rather than writing a vhost that points at a webroot that doesn't exist yet.
+**Preflight:** sudo present and usable; `nginx -t` passes; certbot present;
+**`${BASE_DIR}/current/public` must already exist** — if not, exit with a message
+telling the operator to run `structure-setup.sh` for this site first, rather than
+writing a vhost that points at a webroot that doesn't exist yet.
 
 **Does**, in order (same flow as today's Group 3):
 1. Detect the PHP-FPM socket (prefer `php8.5-fpm.sock`, fall back to the first
@@ -110,7 +115,7 @@ name, redo the renewal check, or recover from a manually broken vhost.
 
 **Prompts:** Laravel PostgreSQL database name, username, password.
 
-**Preflight:** `deployer` user check; sudo present and usable; `psql` present.
+**Preflight:** sudo present and usable; `psql` present.
 
 **Does** (same flow as today's Group 4): create the role if it doesn't exist, then
 unconditionally `ALTER ROLE ... WITH LOGIN PASSWORD` (so re-running rotates the
@@ -145,3 +150,6 @@ the three scripts under `debian-13/deployment/` in place of the single
 - That each script is fully self-contained by design (no shared lib, no
   cross-script state passing) so that any one of them can be copied and run
   elsewhere independently.
+- That the deployer-identity check from the old script is gone: the three scripts
+  only require the executing user to have sudo, not to literally be logged in as
+  `deployer`. Ownership of created files is still hardcoded to `deployer:www-data`.
