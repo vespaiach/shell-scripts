@@ -57,31 +57,35 @@ setup script provisions and the `www-data` web-server group — this is about lo
 who may *run* the script, not about changing who *owns* the resulting files.
 
 **Does**, in order:
-1. Validate `current` is either absent, a dangling symlink, or a symlink to a real
-   release directory (refuse if it exists and is not a symlink — `ln -sfn` would nest
-   inside it rather than replace it).
-2. Adopt the existing release if `current` already resolves to one; otherwise mint a
-   new timestamped release directory. (Same logic as today's Group 2.)
-3. Create the generic skeleton (`releases/`, `shared/logs/`, the active release's
+1. **Hard stop if `/var/www/<site>` already exists in any form.** This is a
+   create-only script: it refuses outright rather than adopting, updating, or
+   otherwise touching an existing site directory. No `current`-symlink adoption
+   branch, no dangling-symlink handling — those only existed to make re-runs safe,
+   and re-runs are no longer a supported use of this script.
+2. Mint a new timestamped release directory.
+3. Create the generic skeleton (`releases/`, `shared/logs/`, the release's
    `public/`) and the Laravel-specific skeleton (`shared/storage/...`,
    `shared/bootstrap/cache/`).
-4. Create the shared `.env` file if absent, lock it to `640` immediately.
+4. Create the shared `.env` file, lock it to `640` immediately.
 5. `chown -R deployer:www-data` the whole site tree.
-6. If not adopting: point `current` at the release, symlink `storage/`,
-   `bootstrap/cache/`, and `.env` from the release into the shared tree.
+6. Point `current` at the release, symlink `storage/`, `bootstrap/cache/`, and
+   `.env` from the release into the shared tree.
 7. Write `DB_CONNECTION`/`DB_HOST`/`DB_PORT`/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`
-   into `.env`, replacing any prior `DB_*` lines and preserving everything else
-   (temp-file-then-move, as today).
+   into the freshly created `.env`.
 8. Full permission pass: core structural perms (`755` on base/releases/shared dirs,
-   conventional `755`/`644` across the active release tree) plus Laravel runtime
-   perms (`2775`/`664` with setgid on `storage/` and `bootstrap/cache/`), and
-   re-lock `.env` to `640`.
+   conventional `755`/`644` across the release tree) plus Laravel runtime perms
+   (`2775`/`664` with setgid on `storage/` and `bootstrap/cache/`), and re-lock
+   `.env` to `640`.
 
-**Idempotent:** every step above is safe to repeat. Re-running with the same site
-name adopts the existing release rather than minting a new one; `.env` `DB_*` lines
-are replaced, not duplicated; all `mkdir -p`/`chmod`/`chown` calls are naturally
-repeatable. This makes the script usable on its own just to rotate DB credentials in
-`.env`, or to re-assert permissions after manual drift, without touching Nginx or TLS.
+**One-time execution, by design — not idempotent.** Unlike the other two scripts,
+this one is intentionally *not* safe to re-run: running it a second time for the
+same site is a hard failure (step 1), not a no-op. This is deliberate — it removes
+any risk of silently reprovisioning permissions or clobbering `.env` on a site
+that's already live. One consequence worth knowing: if `database-setup.sh` is later
+used to rotate the database password, that new password lives in Postgres but
+`.env` is never rewritten after initial creation, so the operator must update
+`.env` by hand in that case — this script provides no built-in way to do it after
+the site has been created.
 
 ## Script 2: `nginx-tls-setup.sh`
 
@@ -153,3 +157,6 @@ the three scripts under `debian-13/deployment/` in place of the single
 - That the deployer-identity check from the old script is gone: the three scripts
   only require the executing user to have sudo, not to literally be logged in as
   `deployer`. Ownership of created files is still hardcoded to `deployer:www-data`.
+- That `structure-setup.sh` is create-only and hard-stops if `/var/www/<site>`
+  already exists — it is the one script of the three that is *not* safe to re-run.
+  `nginx-tls-setup.sh` and `database-setup.sh` remain safe to re-run.
