@@ -1,13 +1,50 @@
 #!/usr/bin/env bash
 
+# Install and start Nginx on Debian when it is not already installed. Before
+# installation, ensure port 80 is available by stopping Apache when necessary,
+# then verify that the Nginx service is running.
+
 # Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
+
+# Stop before performing any setup when Nginx is already installed.
+if [[ "$(dpkg-query --show --showformat='${Status}' nginx 2>/dev/null || true)" == "install ok installed" ]]; then
+	echo "Nginx is already installed. Nothing to do."
+	exit 0
+fi
 
 # Every operation in this script needs elevation, so fail before touching
 # anything if sudo is unavailable.
 if ! command -v sudo >/dev/null 2>&1; then
 	echo "sudo is required but not installed." >&2
 	exit 1
+fi
+
+if ! command -v ss >/dev/null 2>&1; then
+	echo "ss is required to check whether port 80 is available." >&2
+	exit 1
+fi
+
+port_80_is_in_use() {
+	sudo ss --no-header --listening --tcp --numeric 'sport = :80' | grep --quiet .
+}
+
+# Apache commonly occupies port 80 on Debian. Stop it before installing Nginx.
+if port_80_is_in_use; then
+	if sudo systemctl is-active --quiet apache2; then
+		echo "Port 80 is in use by Apache. Stopping Apache."
+		sudo systemctl stop apache2
+	else
+		echo "Port 80 is in use, but Apache is not active. Cannot install Nginx." >&2
+		sudo ss --listening --tcp --numeric --processes 'sport = :80' >&2
+		exit 1
+	fi
+
+	if port_80_is_in_use; then
+		echo "Port 80 is still in use after stopping Apache. Cannot install Nginx." >&2
+		sudo ss --listening --tcp --numeric --processes 'sport = :80' >&2
+		exit 1
+	fi
 fi
 
 # ****************************************************************************************************
