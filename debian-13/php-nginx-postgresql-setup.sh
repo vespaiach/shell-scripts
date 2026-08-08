@@ -386,8 +386,13 @@ if sudo test -s "${AUTH_KEYS}" && [[ -n "$(sudo tail -c 1 "${AUTH_KEYS}")" ]]; t
 fi
 
 # Append rather than overwrite: re-running this script must not drop keys an
-# operator added by hand, and must not accumulate duplicates of its own.
-if sudo grep -qxF -- "${DEPLOYER_SSH_KEY}" "${AUTH_KEYS}"; then
+# operator added by hand, and should not accumulate duplicates of the same key
+# if the comment/options differ between runs.
+DEPLOYER_SSH_KEY_TYPE="$(printf '%s\n' "${DEPLOYER_SSH_KEY}" | awk '{print $1}')"
+DEPLOYER_SSH_KEY_BLOB="$(printf '%s\n' "${DEPLOYER_SSH_KEY}" | awk '{print $2}')"
+DEPLOYER_SSH_KEY_BLOB_RE="${DEPLOYER_SSH_KEY_BLOB//+/\\+}"
+
+if sudo grep -Eq "(^|[[:space:]])${DEPLOYER_SSH_KEY_TYPE}[[:space:]]+${DEPLOYER_SSH_KEY_BLOB_RE}([[:space:]]|$)" "${AUTH_KEYS}"; then
 	echo "SSH key is already authorized for '${DEPLOYER_USER}'."
 else
 	printf '%s\n' "${DEPLOYER_SSH_KEY}" | sudo tee -a "${AUTH_KEYS}" > /dev/null
