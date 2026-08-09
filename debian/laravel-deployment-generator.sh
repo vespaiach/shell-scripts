@@ -6,7 +6,7 @@ set -euo pipefail
 # ****************************************************************************************************
 # Generate a standalone, re-runnable laravel-deployment.sh for a site whose
 # atomic releases/shared/current layout has already been created by
-# structure-setup.sh. The generated script is what actually clones a branch
+# 06-folder-structure.sh. The generated script is what actually clones a branch
 # from GitHub into a new release and swaps current onto it; this script only
 # writes that file out.
 # ****************************************************************************************************
@@ -17,7 +17,7 @@ Usage: laravel-deployment-generator.sh --site <name> --repo <ssh-url> [--keep-re
 
   --site <name>          Site identifier, e.g. app.mysite.com. Must already
                           have the releases/shared/current layout that
-                          structure-setup.sh creates.
+                          06-folder-structure.sh creates.
   --repo <ssh-url>        GitHub repo to deploy, over SSH, e.g.
                           git@github.com:owner/repo.git
   --keep-releases <n>     Releases to retain after each deploy. Defaults to
@@ -110,17 +110,17 @@ CURRENT_LINK="${BASE_DIR}/current"
 DEPLOY_SCRIPT_PATH="${BASE_DIR}/laravel-deployment.sh"
 WEB_GROUP="www-data"
 
-# structure-setup.sh must have already created the atomic layout -- this
+# 06-folder-structure.sh must have already created the atomic layout -- this
 # script only writes the deploy script, it does not provision directories.
 if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
 	echo "${BASE_DIR} does not have the expected releases/shared layout." >&2
-	echo "Run structure-setup.sh for '${SITE_NAME}' first." >&2
+	echo "Run 06-folder-structure.sh for '${SITE_NAME}' first." >&2
 	exit 1
 fi
 
 if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	echo "${CURRENT_LINK} exists but is not a symlink." >&2
-	echo "structure-setup.sh should have created it as one -- check ${BASE_DIR} manually." >&2
+	echo "06-folder-structure.sh should have created it as one -- check ${BASE_DIR} manually." >&2
 	exit 1
 fi
 
@@ -129,6 +129,12 @@ fi
 if ! getent group "${WEB_GROUP}" >/dev/null 2>&1; then
 	echo "Required group '${WEB_GROUP}' does not exist." >&2
 	echo "Create it or update WEB_GROUP in this script." >&2
+	exit 1
+fi
+
+if ! getent passwd deployer >/dev/null 2>&1; then
+	echo "Required user 'deployer' does not exist." >&2
+	echo "Run 01-packages-and-deployer.sh first." >&2
 	exit 1
 fi
 
@@ -188,6 +194,16 @@ if ! command -v git >/dev/null 2>&1 || ! command -v composer >/dev/null 2>&1 || 
 	exit 1
 fi
 
+if ! command -v sudo >/dev/null 2>&1; then
+	echo "sudo is required but not installed." >&2
+	exit 1
+fi
+
+if ! sudo -n true 2>/dev/null; then
+	echo "This script needs passwordless sudo (chown, systemctl reload) to complete a deploy." >&2
+	exit 1
+fi
+
 BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
@@ -197,9 +213,9 @@ SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
 SHARED_ENV_FILE="${SHARED_DIR}/.env"
 WEB_GROUP="www-data"
 
-if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" || ! -f "${SHARED_ENV_FILE}" ]]; then
-	echo "${BASE_DIR} is missing the expected releases/shared/.env layout." >&2
-	echo "Run structure-setup.sh for '${SITE_NAME}' first." >&2
+if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" || ! -s "${SHARED_ENV_FILE}" ]]; then
+	echo "${BASE_DIR} is missing the expected releases/shared/.env layout, or .env is empty." >&2
+	echo "Run 06-folder-structure.sh for '${SITE_NAME}' first, then populate ${SHARED_ENV_FILE} (APP_KEY, DB_*, etc.) before deploying." >&2
 	exit 1
 fi
 
@@ -225,7 +241,8 @@ fi
 detect_php_fpm_service() {
 	systemctl list-units --type=service --state=active --no-legend 'php*-fpm.service' 2>/dev/null \
 		| awk '{print $1}' \
-		| head -n 1
+		| head -n 1 \
+		|| true
 }
 
 reload_php_fpm() {
@@ -266,6 +283,9 @@ if [[ "${ROLLBACK}" -eq 1 ]]; then
 
 	PREVIOUS_RELEASE_DIR="${RELEASES_DIR}/${PREVIOUS_RELEASE_NAME}"
 
+	echo "Regenerating cached config/routes/views for ${PREVIOUS_RELEASE_NAME}..."
+	(cd "${PREVIOUS_RELEASE_DIR}" && php artisan config:cache && php artisan route:cache && php artisan view:cache)
+
 	echo "Rolling back current from ${CURRENT_RELEASE_NAME} to ${PREVIOUS_RELEASE_NAME}..."
 	ln -sfn "${PREVIOUS_RELEASE_DIR}" "${CURRENT_LINK}"
 	reload_php_fpm
@@ -286,7 +306,7 @@ echo "Deploying branch '${BRANCH}' to ${NEW_RELEASE_DIR}..."
 git clone --branch "${BRANCH}" --single-branch --depth 1 "${REPO_URL}" "${NEW_RELEASE_DIR}"
 
 # The clone may bring its own .env / storage / bootstrap/cache -- replace
-# them with links into the shared tree structure-setup.sh already manages.
+# them with links into the shared tree 06-folder-structure.sh already manages.
 rm -rf "${NEW_RELEASE_DIR}/.env" "${NEW_RELEASE_DIR}/storage" "${NEW_RELEASE_DIR}/bootstrap/cache"
 mkdir -p "${NEW_RELEASE_DIR}/bootstrap"
 ln -sfn "${SHARED_ENV_FILE}" "${NEW_RELEASE_DIR}/.env"
@@ -299,9 +319,6 @@ echo "Installing Composer dependencies..."
 echo "Running database migrations..."
 (cd "${NEW_RELEASE_DIR}" && php artisan migrate --force)
 
-echo "Caching config/routes/views..."
-(cd "${NEW_RELEASE_DIR}" && php artisan config:cache && php artisan route:cache && php artisan view:cache)
-
 if [[ -f "${NEW_RELEASE_DIR}/package.json" ]]; then
 	echo "Building frontend assets..."
 	(cd "${NEW_RELEASE_DIR}" && npm ci && npm run build)
@@ -312,11 +329,14 @@ fi
 echo "Setting release permissions..."
 # Only the group change needs sudo: deployer already owns everything it just
 # cloned, but changing the group to www-data needs root since deployer isn't
-# a member of that group (same reasoning as structure-setup.sh).
+# a member of that group (same reasoning as 06-folder-structure.sh).
 sudo chown -R deployer:"${WEB_GROUP}" "${NEW_RELEASE_DIR}"
 chmod 755 "${NEW_RELEASE_DIR}"
-find "${NEW_RELEASE_DIR}" -type d -exec chmod 755 {} \;
-find "${NEW_RELEASE_DIR}" -type f -exec chmod 644 {} \;
+find "${NEW_RELEASE_DIR}" -type d -exec chmod 755 {} +
+find "${NEW_RELEASE_DIR}" -type f -exec chmod 644 {} +
+
+echo "Caching config/routes/views..."
+(cd "${NEW_RELEASE_DIR}" && php artisan config:cache && php artisan route:cache && php artisan view:cache)
 
 echo "Swapping current -> ${NEW_RELEASE_DIR}..."
 ln -sfn "${NEW_RELEASE_DIR}" "${CURRENT_LINK}"

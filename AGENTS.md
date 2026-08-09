@@ -27,7 +27,7 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
   `atomic-deployment-setup.sh` remains for now.
 - `laravel-deployment-generator.sh` writes a standalone, re-runnable
   `laravel-deployment.sh` into `/var/www/<site>/` for a site whose
-  releases/shared/current layout `structure-setup.sh` already created. Takes
+  releases/shared/current layout `06-folder-structure.sh` already created. Takes
   `--site`, `--repo` (SSH GitHub URL only), and an optional `--keep-releases`
   (default 5) flag, and hard-stops if the site's structure is missing --
   it does not provision that layout itself. The generated script must run as
