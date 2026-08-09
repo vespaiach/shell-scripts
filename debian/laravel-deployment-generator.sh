@@ -33,15 +33,27 @@ KEEP_RELEASES=5
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--site)
-			SITE_NAME="${2:-}"
+			if [[ $# -lt 2 ]]; then
+				echo "--site requires a value." >&2
+				exit 1
+			fi
+			SITE_NAME="$2"
 			shift 2
 			;;
 		--repo)
-			REPO_URL="${2:-}"
+			if [[ $# -lt 2 ]]; then
+				echo "--repo requires a value." >&2
+				exit 1
+			fi
+			REPO_URL="$2"
 			shift 2
 			;;
 		--keep-releases)
-			KEEP_RELEASES="${2:-}"
+			if [[ $# -lt 2 ]]; then
+				echo "--keep-releases requires a value." >&2
+				exit 1
+			fi
+			KEEP_RELEASES="$2"
 			shift 2
 			;;
 		-h|--help)
@@ -80,7 +92,7 @@ if [[ ! "${REPO_URL}" =~ ^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+\.gi
 	exit 1
 fi
 
-if [[ ! "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] || [[ "${KEEP_RELEASES}" -lt 1 ]]; then
+if [[ ! "${KEEP_RELEASES}" =~ ^[1-9][0-9]*$ ]]; then
 	echo "--keep-releases must be a positive integer." >&2
 	exit 1
 fi
