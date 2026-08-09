@@ -11,67 +11,13 @@ set -euo pipefail
 # writes that file out.
 # ****************************************************************************************************
 
-usage() {
-	cat <<'USAGE'
-Usage: laravel-deployment-generator.sh --site <name> --repo <ssh-url> [--keep-releases <n>]
+# ---- Collect input ----
 
-  --site <name>          Site identifier, e.g. app.mysite.com. Must already
-                          have the releases/shared/current layout that
-                          06-folder-structure.sh creates.
-  --repo <ssh-url>        GitHub repo to deploy, over SSH, e.g.
-                          git@github.com:owner/repo.git
-  --keep-releases <n>     Releases to retain after each deploy. Defaults to
-                          5. Values below 2 leave no release to roll back to.
-  -h, --help              Show this help text.
-USAGE
-}
-
-SITE_NAME=""
-REPO_URL=""
-KEEP_RELEASES=5
-
-while [[ $# -gt 0 ]]; do
-	case "$1" in
-		--site)
-			if [[ $# -lt 2 ]]; then
-				echo "--site requires a value." >&2
-				exit 1
-			fi
-			SITE_NAME="$2"
-			shift 2
-			;;
-		--repo)
-			if [[ $# -lt 2 ]]; then
-				echo "--repo requires a value." >&2
-				exit 1
-			fi
-			REPO_URL="$2"
-			shift 2
-			;;
-		--keep-releases)
-			if [[ $# -lt 2 ]]; then
-				echo "--keep-releases requires a value." >&2
-				exit 1
-			fi
-			KEEP_RELEASES="$2"
-			shift 2
-			;;
-		-h|--help)
-			usage
-			exit 0
-			;;
-		*)
-			echo "Unknown argument: $1" >&2
-			usage >&2
-			exit 1
-			;;
-	esac
-done
-
-# ---- Validate input ----
+# Primary site identifier used for the directory layout.
+read -r -p "Site name (example: app.mysite.com): " SITE_NAME
 
 if [[ -z "${SITE_NAME}" ]]; then
-	echo "--site is required." >&2
+	echo "Site name cannot be empty." >&2
 	exit 1
 fi
 
@@ -80,25 +26,35 @@ if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
 	exit 1
 fi
 
+# GitHub repo to deploy, over SSH, e.g. git@github.com:owner/repo.git. Must
+# already have the releases/shared/current layout that 06-folder-structure.sh
+# creates.
+read -r -p "GitHub repo SSH URL (example: git@github.com:owner/repo.git): " REPO_URL
+
 if [[ -z "${REPO_URL}" ]]; then
-	echo "--repo is required." >&2
+	echo "Repo URL cannot be empty." >&2
 	exit 1
 fi
 
 # SSH-only deploy-key workflow -- an HTTPS URL would fail at first deploy
 # instead of at generation time, so reject it here.
 if [[ ! "${REPO_URL}" =~ ^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+\.git$ ]]; then
-	echo "--repo must be an SSH GitHub URL, e.g. git@github.com:owner/repo.git" >&2
+	echo "Repo must be an SSH GitHub URL, e.g. git@github.com:owner/repo.git" >&2
 	exit 1
 fi
 
+# Releases to retain after each deploy. Values below 2 leave no release to
+# roll back to.
+read -r -p "Releases to keep after each deploy (default: 5): " KEEP_RELEASES
+KEEP_RELEASES="${KEEP_RELEASES:-5}"
+
 if [[ ! "${KEEP_RELEASES}" =~ ^[1-9][0-9]*$ ]]; then
-	echo "--keep-releases must be a positive integer." >&2
+	echo "Releases to keep must be a positive integer." >&2
 	exit 1
 fi
 
 if [[ "${KEEP_RELEASES}" -lt 2 ]]; then
-	echo "Warning: --keep-releases is ${KEEP_RELEASES}; rollback needs at least one older release on disk." >&2
+	echo "Warning: keeping ${KEEP_RELEASES} release(s); rollback needs at least one older release on disk." >&2
 fi
 
 # ---- Derive paths and check the site's existing structure ----
