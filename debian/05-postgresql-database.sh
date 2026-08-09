@@ -6,10 +6,10 @@ set -euo pipefail
 # ****************************************************************************************************
 # Provision the Laravel app's PostgreSQL role, database, and extensions.
 #
-# Standalone and re-runnable: no dependency on structure-setup.sh or
-# nginx-tls-setup.sh having run, and can be used on its own purely to rotate
-# the database password. Re-running updates Postgres but does not touch a
-# site's .env -- if the site already exists, update .env by hand afterward.
+# Standalone and re-runnable: no dependency on 06-folder-structure.sh or
+# 07-nginx-tls-vhost.sh having run, and can be used on its own purely to
+# rotate the database password. Re-running updates Postgres but does not touch
+# a site's .env -- if the site already exists, update .env by hand afterward.
 # ****************************************************************************************************
 
 # Every operation below needs elevation, so fail before prompting for
