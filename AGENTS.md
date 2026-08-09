@@ -6,6 +6,16 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
 
 - `*-setup.sh` files configure focused services or complete PHP/Node.js stacks.
 - `deployer-creation.sh` and `atomic-deployment-setup.sh` manage deployment users and releases.
+- `database-setup.sh` owns Laravel PostgreSQL role/database/extension (`pgcrypto`, `pg_trgm`)
+  provisioning as a standalone, re-runnable step -- usable on its own (e.g. purely to rotate the
+  database password) with no dependency on any other script in this repo. It's the first of a
+  planned three-way split of `atomic-deployment-setup.sh`'s monolithic flow into standalone
+  structure/nginx-TLS/database steps; the other two have not been extracted yet, so
+  `atomic-deployment-setup.sh` remains for now. Like the rest of the repo's newer scripts, its
+  preflight only requires the executing user to have sudo, not to be logged in as `deployer`. Safe
+  to re-run -- it unconditionally rotates the role's password on every run -- but rotating the
+  password here updates PostgreSQL only; it does **not** rewrite a site's Laravel `.env`, so update
+  `.env` by hand afterward if the site already exists.
 
 There is no application source tree, asset directory, or automated test suite. Keep logic in focused scripts rather than unrelated top-level files.
 
