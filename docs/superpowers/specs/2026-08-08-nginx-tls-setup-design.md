@@ -86,8 +86,7 @@ name, redo the renewal check, or recover from a manually broken vhost.
 - The new file path and what it owns.
 - Its hard precondition on `structure-setup.sh` having already run for the site
   (`${BASE_DIR}/current/public` must exist).
-- That it remains safe to re-run (contrast with `structure-setup.sh`, which is
-  create-only and hard-stops on a second run).
+- That it remains safe to re-run, like both of its siblings.
 - That the deployer-identity check from the old script is gone here: it only
   requires the executing user to have sudo, not to literally be logged in as
   `deployer`.
