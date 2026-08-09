@@ -45,38 +45,50 @@ and from PostgreSQL provisioning (those are the other two scripts).
 
 ## Does, in order
 
-1. **Hard stop if `/var/www/<site>` already exists in any form.** This is a
-   create-only script: it refuses outright rather than adopting, updating, or
-   otherwise touching an existing site directory. No `current`-symlink adoption
-   branch, no dangling-symlink handling — those only existed in the old script to
-   make re-runs safe, and re-runs are not a supported use of this script.
-2. Mint a new timestamped release directory.
+1. **Adopt the existing release if `/var/www/<site>/current` already resolves to
+   one, otherwise mint a new one.** If `current` exists but is not a symlink, hard
+   stop — `ln -sfn` cannot safely repoint that, it would nest the link inside the
+   real directory instead of replacing it, so the operator must move it aside
+   first. If `current` is a symlink to a real directory, adopt that directory as
+   the active release: no new release directory is minted, and step 6's symlinks
+   are left untouched since that release is already wired. A dangling symlink (or
+   no `current` at all) is treated as no deployment yet, same as a brand-new site.
+2. Mint a new timestamped release directory (skipped when adopting).
 3. Create the generic skeleton (`releases/`, `shared/logs/`, the release's
    `public/`) and the Laravel-specific skeleton (`shared/storage/...`,
-   `shared/bootstrap/cache/`).
-4. Create the shared `.env` file, lock it to `640` immediately.
+   `shared/bootstrap/cache/`). Runs unconditionally — `mkdir -p` is a no-op on
+   directories that already exist, so this converges whether or not the release
+   was just adopted.
+4. Create the shared `.env` file, lock it to `640` immediately. `touch` is a
+   no-op on a file that already exists, so this never clobbers content.
 5. `chown -R deployer:www-data` the whole site tree.
 6. Point `current` at the release, symlink `storage/`, `bootstrap/cache/`, and
-   `.env` from the release into the shared tree.
+   `.env` from the release into the shared tree. Skipped when adopting an
+   existing release (see step 1).
 7. Write `DB_CONNECTION`/`DB_HOST`/`DB_PORT`/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`
-   into the freshly created `.env`.
+   into `.env`, replacing any prior `DB_*` lines while preserving everything else
+   already there. Runs unconditionally, so a rerun with a new password converges
+   `.env` to match it.
 8. Full permission pass: core structural perms (`755` on base/releases/shared dirs,
    conventional `755`/`644` across the release tree) plus Laravel runtime perms
    (`2775`/`664` with setgid on `storage/` and `bootstrap/cache/`), and re-lock
-   `.env` to `640`.
+   `.env` to `640`. Runs unconditionally so a rerun catches any drift.
 
-## One-time execution, by design — not idempotent
+## Idempotent by design
 
-Unlike the other two scripts, this one is intentionally *not* safe to re-run:
-running it a second time for the same site is a hard failure (step 1), not a no-op.
-This is deliberate — it removes any risk of silently reprovisioning permissions or
-clobbering `.env` on a site that's already live.
+Unlike the original combined script's fully hands-off re-run behavior, this one
+narrows re-runs to a single, well-defined convergence path: adopt whatever release
+`current` already points at (step 1) rather than minting an orphan release or
+repointing a live site, then re-apply the `.env` content and permission pass
+unconditionally. Running it a second time for the same site is a no-op on the
+directory layout and a controlled refresh of `.env` and permissions — not a hard
+failure, and not a silent reprovision either, since the only things that change on
+a rerun are exactly the values the operator just typed in.
 
-One consequence worth knowing: if `database-setup.sh` is later used to rotate the
-database password, that new password lives in Postgres but `.env` is never
-rewritten after initial creation, so the operator must update `.env` by hand in that
-case — this script provides no built-in way to do it after the site has been
-created.
+One consequence worth knowing: because step 7 rewrites `DB_*` unconditionally, this
+also gives the operator a built-in way to sync `.env` after `database-setup.sh`
+rotates the database password — rerun this script with the new password — where
+the prior create-only design had no such path.
 
 ## Verification
 
@@ -94,9 +106,11 @@ created.
 `structure-setup.sh` in place of the relevant parts of the old
 `atomic-deployment-setup.sh` description, including:
 - The new file path and what it owns.
-- That it's create-only and hard-stops if `/var/www/<site>` already exists — the one
-  script of the three that is *not* safe to re-run (contrast with
-  `nginx-tls-setup.sh` and `database-setup.sh`, which remain safe to re-run).
+- That it's safe to re-run, like its two siblings: a rerun against a site that
+  already exists adopts the release `current` points at rather than minting an
+  orphan release or refusing to run, then reconverges `.env` and permissions to
+  match whatever was just typed in. The only hard stop left is `current` existing
+  as something other than a symlink, which the operator has to move aside by hand.
 - That the deployer-identity check from the old script is gone here: it only
   requires the executing user to have sudo, not to literally be logged in as
   `deployer`. Ownership of created files is still hardcoded to `deployer:www-data`.

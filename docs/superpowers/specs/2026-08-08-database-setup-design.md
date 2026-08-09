@@ -78,9 +78,10 @@ here.
 `atomic-deployment-setup.sh` description, including:
 - The new file path and what it owns.
 - That it has no ordering dependency on the other two scripts.
-- That it remains safe to re-run (contrast with `structure-setup.sh`, which is
-  create-only and hard-stops on a second run), and the `.env`-goes-stale caveat when
-  it's used to rotate a password after the site already exists.
+- That it remains safe to re-run, like both of its siblings, and the
+  `.env`-goes-stale caveat when it's used to rotate a password after the site
+  already exists — though rerunning `structure-setup.sh` with the new password
+  is the built-in way to resync `.env` afterward.
 - That the deployer-identity check from the old script is gone here: it only
   requires the executing user to have sudo, not to literally be logged in as
   `deployer`.

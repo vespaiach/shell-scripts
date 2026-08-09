@@ -8,14 +8,23 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
 - `deployer-creation.sh` and `atomic-deployment-setup.sh` manage deployment users and releases.
 - `database-setup.sh` owns Laravel PostgreSQL role/database/extension (`pgcrypto`, `pg_trgm`)
   provisioning as a standalone, re-runnable step -- usable on its own (e.g. purely to rotate the
-  database password) with no dependency on any other script in this repo. It's the first of a
+  database password) with no dependency on any other script in this repo. Like the rest of the
+  repo's newer scripts, its preflight only requires the executing user to have sudo, not to be
+  logged in as `deployer`. Safe to re-run -- it unconditionally rotates the role's password on
+  every run -- but rotating the password here updates PostgreSQL only; it does **not** rewrite a
+  site's Laravel `.env`. Rerun `structure-setup.sh` with the new password to resync `.env`
+  afterward if the site already exists.
+- `structure-setup.sh` owns the atomic release/shared/current directory layout, the
+  Laravel-specific `storage`/`bootstrap/cache` structure, the shared `.env` file, and the full
+  permission model for a site -- also standalone and re-runnable, with no dependency on
+  `database-setup.sh` or Nginx/TLS provisioning having run, and it never touches Postgres itself
+  (`DB_*` values are written into `.env` only). Re-running against a site that already has a live
+  deployment adopts the release `current` already points at instead of minting a new one, then
+  reconverges `.env` and the permission pass; the only hard stop left is `current` existing as
+  something other than a symlink, which has to be moved aside by hand. This is the second of a
   planned three-way split of `atomic-deployment-setup.sh`'s monolithic flow into standalone
-  structure/nginx-TLS/database steps; the other two have not been extracted yet, so
-  `atomic-deployment-setup.sh` remains for now. Like the rest of the repo's newer scripts, its
-  preflight only requires the executing user to have sudo, not to be logged in as `deployer`. Safe
-  to re-run -- it unconditionally rotates the role's password on every run -- but rotating the
-  password here updates PostgreSQL only; it does **not** rewrite a site's Laravel `.env`, so update
-  `.env` by hand afterward if the site already exists.
+  structure/nginx-TLS/database steps; nginx-TLS has not been extracted yet, so
+  `atomic-deployment-setup.sh` remains for now.
 
 There is no application source tree, asset directory, or automated test suite. Keep logic in focused scripts rather than unrelated top-level files.
 
