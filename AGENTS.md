@@ -25,6 +25,19 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
   planned three-way split of `atomic-deployment-setup.sh`'s monolithic flow into standalone
   structure/nginx-TLS/database steps; nginx-TLS has not been extracted yet, so
   `atomic-deployment-setup.sh` remains for now.
+- `laravel-deployment-generator.sh` writes a standalone, re-runnable
+  `laravel-deployment.sh` into `/var/www/<site>/` for a site whose
+  releases/shared/current layout `structure-setup.sh` already created. Takes
+  `--site`, `--repo` (SSH GitHub URL only), and an optional `--keep-releases`
+  (default 5) flag, and hard-stops if the site's structure is missing --
+  it does not provision that layout itself. The generated script must run as
+  `deployer`: `./laravel-deployment.sh [branch]` (defaults to `main`) clones
+  that branch into a new timestamped release, runs Composer, migrations, and
+  an asset build, then atomically swaps `current` onto it; `./laravel-deployment.sh
+  --rollback` flips `current` back to the previous release on disk without
+  touching migrations or `.env`. Safe to re-run -- every deploy clones a
+  fresh release rather than mutating one in place, and releases beyond
+  `--keep-releases` are pruned automatically.
 
 There is no application source tree, asset directory, or automated test suite. Keep logic in focused scripts rather than unrelated top-level files.
 
