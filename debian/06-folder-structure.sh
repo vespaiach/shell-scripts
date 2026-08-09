@@ -8,15 +8,15 @@ set -euo pipefail
 # storage/bootstrap-cache structure, the shared .env file, and the full
 # permission model for a site.
 #
-# Standalone and re-runnable: no dependency on nginx-tls-setup.sh or
-# database-setup.sh having run, and this script never touches Postgres itself --
+# Standalone and re-runnable: no dependency on 07-nginx-tls-vhost.sh or
+# 05-postgresql-database.sh having run, and this script never touches Postgres itself --
 # DB_* credentials are written into .env only. Re-running against a site that
 # already has a live deployment adopts the release current/ points at instead
 # of minting a new one or refusing to run, then re-applies the .env content and
 # permission pass -- so repeated runs converge on the same result rather than
 # failing or duplicating state. That also gives an operator a way to sync .env
-# after database-setup.sh rotates the password: rerun this script with the new
-# password.
+# after 05-postgresql-database.sh rotates the password: rerun this script with
+# the new password.
 # ****************************************************************************************************
 
 # Every operation below needs elevation, so fail before prompting for
