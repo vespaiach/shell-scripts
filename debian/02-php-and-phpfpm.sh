@@ -62,6 +62,37 @@ else
 fi
 
 # ****************************************************************************************************
+# Install Composer using the official signed installer.
+# ****************************************************************************************************
+
+# 08-laravel-deployment.sh requires 'composer' on PATH before it can run, so it
+# has to be installed here rather than left to individual site provisioning.
+COMPOSER_SETUP="$(mktemp)"
+curl -fsSL -o "${COMPOSER_SETUP}" https://getcomposer.org/installer
+
+# Verify the installer against Composer's published signature before executing
+# it as PHP -- an unverified installer script is arbitrary code execution.
+EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
+ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', '${COMPOSER_SETUP}');")"
+
+if [[ "${EXPECTED_SIGNATURE}" != "${ACTUAL_SIGNATURE}" ]]; then
+	rm -f "${COMPOSER_SETUP}"
+	echo "Composer installer signature mismatch; refusing to run it." >&2
+	exit 1
+fi
+
+sudo php "${COMPOSER_SETUP}" --install-dir=/usr/local/bin --filename=composer
+rm -f "${COMPOSER_SETUP}"
+
+# Verify Composer installation. Exit with an error if Composer is not available.
+if command -v composer >/dev/null 2>&1; then
+	composer --version
+else
+	echo "Composer installation check failed: 'composer' not found on PATH." >&2
+	exit 1
+fi
+
+# ****************************************************************************************************
 # Configure PHP-FPM for production workloads and tune its process manager settings.
 # ****************************************************************************************************
 
