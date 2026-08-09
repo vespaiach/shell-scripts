@@ -100,17 +100,6 @@ else
 	exit 1
 fi
 
-# Matches the key-type and base64 blob at the start of an OpenSSH public key.
-# Every key reaching this point was typed by a human, so it is checked before
-# installation: a typo or an empty value would otherwise leave the account with
-# an authorized_keys that grants nobody access.
-SSH_KEY_PATTERN='^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)[[:space:]]+[A-Za-z0-9+/]+=*([[:space:]]|$)'
-
-if [[ ! "${DEPLOYER_SSH_KEY}" =~ ${SSH_KEY_PATTERN} ]]; then
-	echo "That does not look like an OpenSSH public key (expected e.g. 'ssh-ed25519 AAAA... comment')." >&2
-	echo "Note this is the *public* key (.pub) -- never paste a private key here." >&2
-	exit 1
-fi
 
 # A pre-existing account may have no home directory. Creating .ssh below would
 # then create the home too, owned by root, which sshd's StrictModes rejects.

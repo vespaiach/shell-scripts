@@ -17,15 +17,6 @@ PHP_VERSION="${1:-8.5}"
 # Install PHP and its common extensions from the Sury repository.
 # ****************************************************************************************************
 
-# Refresh package index.
-sudo apt update
-
-# Install required tools for repository management and package downloads.
-sudo apt install -y ca-certificates curl lsb-release
-
-# Download and install the Sury PHP repository GPG key.
-curl -fsSL https://packages.sury.org/php/apt.gpg | sudo gpg --dearmor -o /usr/share/keyrings/sury-php.gpg
-
 # Add the Sury PHP APT repository for the current Debian codename.
 echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
 
