@@ -9,14 +9,11 @@ set -euo pipefail
 # permission model for a site.
 #
 # Standalone and re-runnable: no dependency on nginx-tls-setup.sh or
-# database-setup.sh having run, and this script never touches Postgres itself --
-# DB_* credentials are written into .env only. Re-running against a site that
-# already has a live deployment adopts the release current/ points at instead
-# of minting a new one or refusing to run, then re-applies the .env content and
-# permission pass -- so repeated runs converge on the same result rather than
-# failing or duplicating state. That also gives an operator a way to sync .env
-# after database-setup.sh rotates the password: rerun this script with the new
-# password.
+# database-setup.sh having run, and this script never touches Postgres itself.
+# Re-running against a site that already has a live deployment adopts the
+# release current/ points at instead of minting a new one or refusing to run,
+# then re-applies the permission pass -- so repeated runs converge on the same
+# result rather than failing or duplicating state.
 # ****************************************************************************************************
 
 # Every operation below needs elevation, so fail before prompting for
@@ -61,38 +58,6 @@ if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
 	exit 1
 fi
 
-read -r -p "Laravel PostgreSQL database name: " DB_DATABASE
-
-if [[ -z "${DB_DATABASE}" ]]; then
-	echo "Database name cannot be empty." >&2
-	exit 1
-fi
-
-if [[ ! "${DB_DATABASE}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-	echo "Database name must start with a letter or underscore and contain only letters, numbers, and underscores." >&2
-	exit 1
-fi
-
-read -r -p "Laravel PostgreSQL username: " DB_USERNAME
-
-if [[ -z "${DB_USERNAME}" ]]; then
-	echo "Database username cannot be empty." >&2
-	exit 1
-fi
-
-if [[ ! "${DB_USERNAME}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-	echo "Database username must start with a letter or underscore and contain only letters, numbers, and underscores." >&2
-	exit 1
-fi
-
-read -r -s -p "Laravel PostgreSQL password: " DB_PASSWORD
-echo
-
-if [[ -z "${DB_PASSWORD}" ]]; then
-	echo "Database password cannot be empty." >&2
-	exit 1
-fi
-
 # ---- Derive paths ----
 
 BASE_DIR="/var/www/${SITE_NAME}"
@@ -116,9 +81,9 @@ fi
 
 # Re-running against a site that already has a live deployment must not mint an
 # orphan release directory or repoint current/. Adopt whatever current/
-# resolves to instead, so the .env update and permission pass below apply to
-# the release actually being served. A dangling current/ counts as no
-# deployment and is repointed below like a fresh site.
+# resolves to instead, so the permission pass below applies to the release
+# actually being served. A dangling current/ counts as no deployment and is
+# repointed below like a fresh site.
 if [[ -L "${CURRENT_LINK}" && -d "${CURRENT_LINK}" ]]; then
 	ADOPTED_EXISTING_RELEASE=1
 	ACTIVE_RELEASE_DIR="$(cd "${CURRENT_LINK}" && pwd -P)"
@@ -164,44 +129,6 @@ if [[ "${ADOPTED_EXISTING_RELEASE}" -eq 0 ]]; then
 	sudo ln -sfn "${SHARED_ENV_FILE}" "${ACTIVE_RELEASE_DIR}/.env"
 fi
 
-# ---- Write DB_* values into the shared .env ----
-
-# Escape a value for safe interpolation inside a double-quoted .env value.
-escape_env_double_quoted() {
-	local value="$1"
-	value="${value//\\/\\\\}"
-	value="${value//\"/\\\"}"
-	value="${value//\$/\\$}"
-	printf '%s' "$value"
-}
-
-echo "Updating shared Laravel environment file..."
-
-TMP_ENV_FILE="$(mktemp)"
-
-# Drop any prior DB_* lines while preserving everything else already in .env,
-# then append the freshly collected values. Runs unconditionally, both on a
-# freshly created empty file and on an adopted site's existing .env, so a
-# rerun with an updated password converges .env to match.
-# shellcheck disable=SC2024 # only the read needs sudo; TMP_ENV_FILE must stay
-# owned by the running user so the mv/chown below can reset it deliberately.
-sudo grep -Ev '^(DB_CONNECTION|DB_HOST|DB_PORT|DB_DATABASE|DB_USERNAME|DB_PASSWORD)=' "${SHARED_ENV_FILE}" > "${TMP_ENV_FILE}" || true
-
-cat <<EOF >> "${TMP_ENV_FILE}"
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=${DB_DATABASE}
-DB_USERNAME=${DB_USERNAME}
-DB_PASSWORD="$(escape_env_double_quoted "${DB_PASSWORD}")"
-EOF
-
-sudo mv "${TMP_ENV_FILE}" "${SHARED_ENV_FILE}"
-# The moved temp file carries the running user's ownership, not deployer:www-data,
-# so ownership has to be reset for PHP-FPM to read .env.
-sudo chown deployer:"${WEB_GROUP}" "${SHARED_ENV_FILE}"
-sudo chmod 640 "${SHARED_ENV_FILE}"
-
 # ---- Final permission pass ----
 # The authoritative permission pass, run last and unconditionally so a rerun
 # catches any drift: core structural perms for Nginx/PHP-FPM to traverse and
@@ -223,7 +150,7 @@ sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type d -exec chmod 2775 {} \;
 sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type f -exec chmod 664 {} \;
 sudo chmod 2775 "${SHARED_DIR}/logs" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}"
 
-# .env holds the plaintext DB password -- keep it owner/group readable only.
+# .env may hold secrets -- keep it owner/group readable only.
 sudo chmod 640 "${SHARED_ENV_FILE}"
 
 # Final setup summary for quick verification and handoff notes.
@@ -231,8 +158,6 @@ echo "Done."
 echo "Site: ${SITE_NAME}"
 echo "Base directory: ${BASE_DIR}"
 echo "Current release: ${ACTIVE_RELEASE_DIR}"
-echo "Laravel database: ${DB_DATABASE}"
-echo "Laravel database user: ${DB_USERNAME}"
 echo "Shared env file: ${SHARED_ENV_FILE}"
 echo "Permission summary:"
 sudo stat -c '%a %U:%G %n' "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}" "${SHARED_ENV_FILE}"
