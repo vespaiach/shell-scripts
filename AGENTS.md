@@ -4,40 +4,35 @@
 
 This repository contains Bash scripts for provisioning Debian servers. All maintained scripts live in `debian/`:
 
-- `*-setup.sh` files configure focused services or complete PHP/Node.js stacks.
-- `deployer-creation.sh` and `atomic-deployment-setup.sh` manage deployment users and releases.
-- `database-setup.sh` owns Laravel PostgreSQL role/database/extension (`pgcrypto`, `pg_trgm`)
+- `*-setup.sh` and numbered `0N-*.sh` files configure focused services or complete PHP/Node.js stacks.
+- `01-packages-and-deployer.sh` and `atomic-deployment-setup.sh` manage deployment users and releases.
+- `05-postgresql-database.sh` owns Laravel PostgreSQL role/database/extension (`pgcrypto`, `pg_trgm`)
   provisioning as a standalone, re-runnable step -- usable on its own (e.g. purely to rotate the
   database password) with no dependency on any other script in this repo. Like the rest of the
   repo's newer scripts, its preflight only requires the executing user to have sudo, not to be
   logged in as `deployer`. Safe to re-run -- it unconditionally rotates the role's password on
   every run -- but rotating the password here updates PostgreSQL only; it does **not** rewrite a
-  site's Laravel `.env`. Rerun `structure-setup.sh` with the new password to resync `.env`
+  site's Laravel `.env`. Rerun `06-folder-structure.sh` with the new password to resync `.env`
   afterward if the site already exists.
-- `structure-setup.sh` owns the atomic release/shared/current directory layout, the
+- `06-folder-structure.sh` owns the atomic release/shared/current directory layout, the
   Laravel-specific `storage`/`bootstrap/cache` structure, the shared `.env` file, and the full
   permission model for a site -- also standalone and re-runnable, with no dependency on
-  `database-setup.sh` or Nginx/TLS provisioning having run, and it never touches Postgres itself
-  (`DB_*` values are written into `.env` only). Re-running against a site that already has a live
-  deployment adopts the release `current` already points at instead of minting a new one, then
+  `05-postgresql-database.sh` or `07-nginx-tls-vhost.sh` having run, and it never touches Postgres
+  itself (`DB_*` values are written into `.env` only). Re-running against a site that already has a
+  live deployment adopts the release `current` already points at instead of minting a new one, then
   reconverges `.env` and the permission pass; the only hard stop left is `current` existing as
-  something other than a symlink, which has to be moved aside by hand. This is the second of a
-  planned three-way split of `atomic-deployment-setup.sh`'s monolithic flow into standalone
-  structure/nginx-TLS/database steps; nginx-TLS has not been extracted yet, so
-  `atomic-deployment-setup.sh` remains for now.
-- `laravel-deployment-generator.sh` writes a standalone, re-runnable
-  `laravel-deployment.sh` into `/var/www/<site>/` for a site whose
-  releases/shared/current layout `06-folder-structure.sh` already created. Takes
-  `--site`, `--repo` (SSH GitHub URL only), and an optional `--keep-releases`
-  (default 5) flag, and hard-stops if the site's structure is missing --
-  it does not provision that layout itself. The generated script must run as
-  `deployer`: `./laravel-deployment.sh [branch]` (defaults to `main`) clones
-  that branch into a new timestamped release, runs Composer, migrations, and
-  an asset build, then atomically swaps `current` onto it; `./laravel-deployment.sh
-  --rollback` flips `current` back to the previous release on disk without
-  touching migrations or `.env`. Safe to re-run -- every deploy clones a
-  fresh release rather than mutating one in place, and releases beyond
-  `--keep-releases` are pruned automatically.
+  something other than a symlink, which has to be moved aside by hand.
+- `07-nginx-tls-vhost.sh` owns the site's Nginx vhost and Let's Encrypt/certbot TLS issuance --
+  also standalone and re-runnable, with no dependency on `05-postgresql-database.sh` having run.
+  Its one hard precondition is `06-folder-structure.sh` having already run for the site: it exits
+  immediately if `/var/www/<site>/current/public` doesn't exist yet, rather than writing a vhost
+  that points at a webroot that isn't there. Like its siblings, its preflight only requires sudo,
+  not a `deployer` login. Vhost files are always fully rewritten via temp-file-then-move and
+  certbot itself is idempotent, so it's safe to re-run to change the server name, redo the renewal
+  verification, or recover from a manually broken vhost. This completes the planned three-way split
+  of `atomic-deployment-setup.sh`'s monolithic flow into standalone structure/nginx-TLS/database
+  steps. `atomic-deployment-setup.sh` still exists in this repo but is now superseded by the three
+  split scripts above.
 
 There is no application source tree, asset directory, or automated test suite. Keep logic in focused scripts rather than unrelated top-level files.
 
@@ -52,11 +47,11 @@ shellcheck debian/*.sh
 
 `bash -n` checks syntax without executing actions; `shellcheck` performs static analysis. Use `git diff --check` for whitespace errors.
 
-Run scripts only on a disposable Debian host; they install packages, modify `/etc`, manage services, and may prompt for credentials. Example: `bash debian/php-phpfpm-setup.sh 8.5`.
+Run scripts only on a disposable Debian host; they install packages, modify `/etc`, manage services, and may prompt for credentials. Example: `bash debian/02-php-and-phpfpm.sh 8.5`.
 
 ## Coding Style & Naming Conventions
 
-Use `#!/usr/bin/env bash` and enable `set -euo pipefail` near the top. Indent blocks with tabs, quote expansions (`"${PHP_VERSION}"`), and use uppercase snake case for script-level variables. Name scripts in lowercase kebab case, such as `postgresql-setup.sh`. Prefer preflight checks, actionable errors sent to stderr, and comments explaining operational risk.
+Use `#!/usr/bin/env bash` and enable `set -euo pipefail` near the top. Indent blocks with tabs, quote expansions (`"${PHP_VERSION}"`), and use uppercase snake case for script-level variables. Name scripts in lowercase kebab case, such as `04-postgresql.sh`. Prefer preflight checks, actionable errors sent to stderr, and comments explaining operational risk.
 
 Each new script must be standalone and independently executable. Do not rely on state created by another repository script unless the prerequisite is checked and clearly reported. Scripts must also be safely rerunnable: detect existing users, packages, files, and configuration before changing them, and make repeated runs converge on the same result without duplicate entries or failures.
 

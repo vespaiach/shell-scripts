@@ -10,6 +10,9 @@ if ! command -v sudo >/dev/null 2>&1; then
 	exit 1
 fi
 
+sudo apt update
+sudo apt install -y curl git gpg ca-certificates lsb-release certbot python3-certbot-nginx
+
 # ****************************************************************************************************
 # Create the deployer user with passwordless sudo and SSH key access.
 # ****************************************************************************************************
