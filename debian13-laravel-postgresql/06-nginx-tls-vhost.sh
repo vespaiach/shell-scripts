@@ -65,20 +65,13 @@ is_valid_hostname() {
 	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 
-# ---- Collect the site name ----
+# ---- Collect remaining input ----
 
-BASE_DIR="$(pwd -P)"
+read -r -p "Site name (e.g., app.mysite.com): " SITE_NAME
+
+BASE_DIR="/var/www/${SITE_NAME}"
 CURRENT_LINK="${BASE_DIR}/current"
 SHARED_DIR="${BASE_DIR}/shared"
-
-read -r -p "Site name: " SITE_NAME
-
-if [[ -z "${SITE_NAME}" ]]; then
-	echo "Site name cannot be empty." >&2
-	exit 1
-fi
-
-# ---- Collect remaining input ----
 
 # Allow distinct HTTP server_name and certificate domain when needed.
 read -r -p "Server name for Nginx (default: ${SITE_NAME}): " SERVER_NAME
