@@ -30,8 +30,8 @@ host + site setup:
   has to be moved aside by hand.
 - `06-nginx-tls-vhost.sh` owns the site's Nginx vhost and Let's Encrypt/certbot TLS issuance -- also
   standalone and re-runnable, with no dependency on `07-database.sh` having run. Run it from inside the
-  site's base directory (`/var/www/<site>`); it derives the site name from `APP_URL` in the shared `.env`
-  rather than prompting for it. Its one hard precondition is `05-folder-structure.sh` having already run
+  site's base directory (`/var/www/<site>`); it prompts for the site name and uses it as typed, with no
+  default and no format validation. Its one hard precondition is `05-folder-structure.sh` having already run
   for the site: it exits immediately if `current/public` doesn't exist, rather than writing a vhost that
   points at a webroot that isn't there. Vhost files are always fully rewritten via temp-file-then-move
   (first HTTP-only for the ACME challenge, then rewritten again with the HTTPS server block once the

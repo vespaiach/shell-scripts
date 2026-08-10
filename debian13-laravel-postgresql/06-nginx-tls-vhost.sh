@@ -9,9 +9,9 @@ set -euo pipefail
 # (05-folder-structure.sh) and database provisioning (05-postgresql-database.sh).
 #
 # Run this script from inside the site's base directory (/var/www/<site>),
-# matching the convention 08-laravel-deployment.sh uses -- the site name is
-# no longer typed in, it's read out of APP_URL in the shared .env that
-# 05-folder-structure.sh already seeded.
+# matching the convention 08-laravel-deployment.sh uses. The operator types
+# the site name at a prompt; it is used as-is, with no default and no
+# format validation.
 #
 # Standalone and re-runnable: no dependency on 05-postgresql-database.sh having
 # run, and it never touches Postgres. It does depend on 05-folder-structure.sh
@@ -56,59 +56,25 @@ fi
 echo "Reminder: configure your domain DNS record(s) before running this setup."
 echo "Point A/AAAA records to this server first, or Let's Encrypt validation can fail."
 
-# Validate a value that is used as both a hostname and a path segment.
-#
-# A plain "letters, numbers, dots, and hyphens" character check is not enough
-# here: it would let '/' or '..' segments through, and those then escape the
-# intended directory in /etc/nginx/sites-available/${SITE_NAME}.conf,
-# /etc/nginx/sites-enabled/${SITE_NAME}.conf, and
-# /etc/letsencrypt/live/${LE_DOMAIN}. Requiring real hostname labels
-# (alphanumeric at both ends, hyphens only inside, joined by single dots)
-# rejects '/', '.', '..', and a leading '-' that certbot could otherwise read
-# as an option rather than a domain.
+# Validate a value used as both a hostname and a path segment: LE_DOMAIN,
+# which becomes /etc/letsencrypt/live/${LE_DOMAIN}. SITE_NAME is not run
+# through this check -- it is used as typed, unvalidated, in
+# /etc/nginx/sites-available/${SITE_NAME}.conf and
+# /etc/nginx/sites-enabled/${SITE_NAME}.conf.
 is_valid_hostname() {
 	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 
-# ---- Derive the site from the current directory and its shared .env ----
+# ---- Collect the site name ----
 
 BASE_DIR="$(pwd -P)"
 CURRENT_LINK="${BASE_DIR}/current"
 SHARED_DIR="${BASE_DIR}/shared"
-SHARED_ENV_FILE="${SHARED_DIR}/.env"
 
-if [[ ! -f "${SHARED_ENV_FILE}" ]]; then
-	echo "${SHARED_ENV_FILE} not found." >&2
-	echo "Run this script from inside the site's base directory (/var/www/<site>) after 05-folder-structure.sh has created it." >&2
-	exit 1
-fi
-
-# APP_URL is the domain 05-folder-structure.sh recorded for this site; reuse
-# it instead of asking the operator to retype the site name.
-APP_URL_LINE="$(grep -m 1 '^APP_URL=' "${SHARED_ENV_FILE}" || true)"
-
-if [[ -z "${APP_URL_LINE}" ]]; then
-	echo "APP_URL not set in ${SHARED_ENV_FILE}." >&2
-	exit 1
-fi
-
-SITE_NAME="${APP_URL_LINE#APP_URL=}"
-SITE_NAME="${SITE_NAME#http://}"
-SITE_NAME="${SITE_NAME#https://}"
-SITE_NAME="${SITE_NAME%%/*}"
+read -r -p "Site name: " SITE_NAME
 
 if [[ -z "${SITE_NAME}" ]]; then
-	echo "Could not derive a site name from APP_URL in ${SHARED_ENV_FILE}." >&2
-	exit 1
-fi
-
-# Re-validate even though 05-folder-structure.sh already validated the value it
-# wrote: APP_URL is used below both as the Nginx server_name default and as a
-# path segment in NGINX_AVAILABLE/NGINX_ENABLED, so a hand-edited .env with a
-# stray '..' or '/' must be rejected here rather than trusted.
-if ! is_valid_hostname "${SITE_NAME}"; then
-	echo "Site name derived from APP_URL ('${SITE_NAME}') is not a valid hostname." >&2
-	echo "Check APP_URL in ${SHARED_ENV_FILE}." >&2
+	echo "Site name cannot be empty." >&2
 	exit 1
 fi
 
