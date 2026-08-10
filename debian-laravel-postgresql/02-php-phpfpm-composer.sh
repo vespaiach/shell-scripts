@@ -10,6 +10,17 @@ if ! command -v sudo >/dev/null 2>&1; then
 	exit 1
 fi
 
+# The Sury keyring is checked with gpg below, and that check discards stderr,
+# so a missing gpg would surface as "not a valid OpenPGP keyring" -- blaming
+# the download for a tool that was never installed. Debian 13 verifies apt
+# signatures with Sequoia's sqv instead of gpgv, so gnupg is no longer pulled
+# in as an apt dependency and is genuinely absent on a minimal trixie host.
+# 01-packages-deployer.sh installs it; running this script on its own does not.
+if ! command -v gpg >/dev/null 2>&1; then
+	echo "gpg is required but not installed; run 01-packages-deployer.sh first, or 'sudo apt install -y gpg'." >&2
+	exit 1
+fi
+
 # PHP version to install, e.g. "8.4". Defaults to 8.5 when not given.
 PHP_VERSION="${1:-8.5}"
 
