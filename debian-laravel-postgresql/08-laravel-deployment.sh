@@ -4,38 +4,35 @@
 set -euo pipefail
 
 # ****************************************************************************************************
-# Generate a standalone, re-runnable laravel-deployment.sh for a site whose
-# atomic releases/shared/current layout has already been created by
-# 06-folder-structure.sh. The generated script is what actually clones a branch
-# from GitHub into a new release and swaps current onto it; this script only
-# writes that file out.
+# Generate a standalone, re-runnable deploy.sh for the site whose atomic
+# releases/shared/current layout has already been created by
+# 05-folder-structure.sh in the current directory. The generated script is
+# what actually clones a branch from GitHub into a new release and swaps
+# current onto it; this script only writes that file out. Run this script
+# from inside the site's base directory (/var/www/<site>).
 # ****************************************************************************************************
 
 usage() {
 	cat <<EOF
 Usage:
-  $(basename "$0") --site <name> --repo <url> [--keep N]
+  $(basename "$0") --repo <url> [--keep N]
 
-  --site      Site name (example: app.mysite.com). Primary identifier used
-              for the directory layout. Required.
+  Run this from inside the site's base directory (/var/www/<site>); the
+  site is identified by the current directory, not a flag.
+
   --repo      GitHub repo SSH URL (example: git@github.com:owner/repo.git).
               Must already have the releases/shared/current layout that
-              06-folder-structure.sh creates. Required.
+              05-folder-structure.sh creates. Required.
   --keep      Releases to keep after each deploy. Default: 5. Values below
               2 leave no release to roll back to.
 EOF
 }
 
-SITE_NAME=""
 REPO_URL=""
 KEEP_RELEASES=5
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		--site)
-			SITE_NAME="${2:-}"
-			shift 2
-			;;
 		--repo)
 			REPO_URL="${2:-}"
 			shift 2
@@ -57,17 +54,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---- Validate arguments ----
-
-if [[ -z "${SITE_NAME}" ]]; then
-	echo "--site is required." >&2
-	usage >&2
-	exit 1
-fi
-
-if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-	echo "Site name can only contain letters, numbers, dots, and hyphens." >&2
-	exit 1
-fi
 
 if [[ -z "${REPO_URL}" ]]; then
 	echo "--repo is required." >&2
@@ -92,30 +78,34 @@ if [[ "${KEEP_RELEASES}" -lt 2 ]]; then
 fi
 
 # ---- Derive paths and check the site's existing structure ----
+# BASE_DIR comes from the current directory -- run this script from inside
+# the site's base directory, not from a --site flag.
 
-BASE_DIR="/var/www/${SITE_NAME}"
+BASE_DIR="$(pwd -P)"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
-DEPLOY_SCRIPT_PATH="${BASE_DIR}/laravel-deployment.sh"
+DEPLOY_SCRIPT_PATH="${BASE_DIR}/deploy.sh"
 WEB_GROUP="www-data"
+DEPLOYER_GROUP="deployer"
 
-# 06-folder-structure.sh must have already created the atomic layout -- this
+# 05-folder-structure.sh must have already created the atomic layout -- this
 # script only writes the deploy script, it does not provision directories.
 if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
 	echo "${BASE_DIR} does not have the expected releases/shared layout." >&2
-	echo "Run 06-folder-structure.sh for '${SITE_NAME}' first." >&2
+	echo "Run 05-folder-structure.sh here first." >&2
 	exit 1
 fi
 
 if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	echo "${CURRENT_LINK} exists but is not a symlink." >&2
-	echo "06-folder-structure.sh should have created it as one -- check ${BASE_DIR} manually." >&2
+	echo "05-folder-structure.sh should have created it as one -- check ${BASE_DIR} manually." >&2
 	exit 1
 fi
 
-# Web server group must exist so the installed deploy script -- and the
-# releases it later chowns -- can be shared with Nginx/PHP-FPM.
+# Web server group must exist so the releases the installed deploy script
+# later chowns can be shared with Nginx/PHP-FPM. The deploy script itself is
+# owned deployer:deployer instead -- see the install step below.
 if ! getent group "${WEB_GROUP}" >/dev/null 2>&1; then
 	echo "Required group '${WEB_GROUP}' does not exist." >&2
 	echo "Create it or update WEB_GROUP in this script." >&2
@@ -125,6 +115,12 @@ fi
 if ! getent passwd deployer >/dev/null 2>&1; then
 	echo "Required user 'deployer' does not exist." >&2
 	echo "Run 01-packages-and-deployer.sh first." >&2
+	exit 1
+fi
+
+if ! getent group "${DEPLOYER_GROUP}" >/dev/null 2>&1; then
+	echo "Required group '${DEPLOYER_GROUP}' does not exist." >&2
+	echo "Expected 'useradd -m deployer' to have created it; check the deployer account." >&2
 	exit 1
 fi
 
@@ -147,12 +143,12 @@ if ! sudo -n true 2>/dev/null; then
 	fi
 fi
 
-# ---- Render laravel-deployment.sh ----
+# ---- Render deploy.sh ----
 # Rendered as a literal (single-quoted) heredoc so none of the generated
-# script's own $variables need escaping, then the three placeholder tokens
-# below are swapped for real values with sed. All three values are already
-# validated above and contain none of '|', so '|' is safe as the sed
-# delimiter.
+# script's own $variables need escaping, then the placeholder tokens below
+# are swapped for real values with sed. REPO_URL and KEEP_RELEASES are
+# validated above and BASE_DIR comes from pwd -P, so none contain '|',
+# making it safe as the sed delimiter.
 
 echo "Rendering ${DEPLOY_SCRIPT_PATH}..."
 
@@ -163,11 +159,12 @@ cat > "${TMP_DEPLOY_SCRIPT}" <<'DEPLOY_TEMPLATE_EOF'
 # Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
 
-# Generated by laravel-deployment-generator.sh for site '__SITE_NAME__'.
-# Rerun the generator to regenerate -- SITE_NAME/REPO_URL/KEEP_RELEASES below
-# are overwritten on every regeneration; do not hand-edit them.
+# Generated by 08-laravel-deployment.sh for '__BASE_DIR__'.
+# Rerun the generator from that directory to regenerate -- BASE_DIR/REPO_URL/
+# KEEP_RELEASES below are overwritten on every regeneration; do not hand-edit
+# them.
 
-SITE_NAME="__SITE_NAME__"
+BASE_DIR="__BASE_DIR__"
 REPO_URL="__REPO_URL__"
 KEEP_RELEASES=__KEEP_RELEASES__
 
@@ -194,7 +191,6 @@ if ! sudo -n true 2>/dev/null; then
 	exit 1
 fi
 
-BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
@@ -205,15 +201,15 @@ WEB_GROUP="www-data"
 
 if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" || ! -s "${SHARED_ENV_FILE}" ]]; then
 	echo "${BASE_DIR} is missing the expected releases/shared/.env layout, or .env is empty." >&2
-	echo "Run 06-folder-structure.sh for '${SITE_NAME}' first, then populate ${SHARED_ENV_FILE} (APP_KEY, DB_*, etc.) before deploying." >&2
+	echo "Run 05-folder-structure.sh for this directory first, then populate ${SHARED_ENV_FILE} (APP_KEY, DB_*, etc.) before deploying." >&2
 	exit 1
 fi
 
 # ---- Mode selection ----
 # Usage:
-#   laravel-deployment.sh              deploy 'main'
-#   laravel-deployment.sh <branch>     deploy <branch>
-#   laravel-deployment.sh --rollback   roll current back to the previous release
+#   deploy.sh              deploy 'main'
+#   deploy.sh <branch>     deploy <branch>
+#   deploy.sh --rollback   roll current back to the previous release
 
 ROLLBACK=0
 BRANCH="main"
@@ -296,7 +292,7 @@ echo "Deploying branch '${BRANCH}' to ${NEW_RELEASE_DIR}..."
 git clone --branch "${BRANCH}" --single-branch --depth 1 "${REPO_URL}" "${NEW_RELEASE_DIR}"
 
 # The clone may bring its own .env / storage / bootstrap/cache -- replace
-# them with links into the shared tree 06-folder-structure.sh already manages.
+# them with links into the shared tree 05-folder-structure.sh already manages.
 rm -rf "${NEW_RELEASE_DIR}/.env" "${NEW_RELEASE_DIR}/storage" "${NEW_RELEASE_DIR}/bootstrap/cache"
 mkdir -p "${NEW_RELEASE_DIR}/bootstrap"
 ln -sfn "${SHARED_ENV_FILE}" "${NEW_RELEASE_DIR}/.env"
@@ -319,7 +315,7 @@ fi
 echo "Setting release permissions..."
 # Only the group change needs sudo: deployer already owns everything it just
 # cloned, but changing the group to www-data needs root since deployer isn't
-# a member of that group (same reasoning as 06-folder-structure.sh).
+# a member of that group (same reasoning as 05-folder-structure.sh).
 sudo chown -R deployer:"${WEB_GROUP}" "${NEW_RELEASE_DIR}"
 chmod 755 "${NEW_RELEASE_DIR}"
 find "${NEW_RELEASE_DIR}" -type d -exec chmod 755 {} +
@@ -341,7 +337,7 @@ for old in "${OLD_RELEASES[@]}"; do
 done
 
 echo "Done."
-echo "Site: ${SITE_NAME}"
+echo "Site: $(basename "${BASE_DIR}")"
 echo "Branch deployed: ${BRANCH}"
 echo "New release: ${NEW_RELEASE_DIR}"
 echo "Permission summary:"
@@ -349,16 +345,16 @@ stat -c '%a %U:%G %n' "${BASE_DIR}" "${RELEASES_DIR}" "${NEW_RELEASE_DIR}"
 DEPLOY_TEMPLATE_EOF
 
 sed -i \
-	-e "s|__SITE_NAME__|${SITE_NAME}|g" \
+	-e "s|__BASE_DIR__|${BASE_DIR}|g" \
 	-e "s|__REPO_URL__|${REPO_URL}|g" \
 	-e "s|__KEEP_RELEASES__|${KEEP_RELEASES}|g" \
 	"${TMP_DEPLOY_SCRIPT}"
 
-sudo install -m 750 -o deployer -g "${WEB_GROUP}" "${TMP_DEPLOY_SCRIPT}" "${DEPLOY_SCRIPT_PATH}"
+sudo install -m 750 -o deployer -g "${DEPLOYER_GROUP}" "${TMP_DEPLOY_SCRIPT}" "${DEPLOY_SCRIPT_PATH}"
 rm -f "${TMP_DEPLOY_SCRIPT}"
 
 echo "Done."
-echo "Site: ${SITE_NAME}"
+echo "Site: $(basename "${BASE_DIR}")"
 echo "Repo: ${REPO_URL}"
 echo "Keep releases: ${KEEP_RELEASES}"
 echo "Deployment script: ${DEPLOY_SCRIPT_PATH}"
