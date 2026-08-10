@@ -11,13 +11,56 @@ set -euo pipefail
 # writes that file out.
 # ****************************************************************************************************
 
-# ---- Collect input ----
+usage() {
+	cat <<EOF
+Usage:
+  $(basename "$0") --site <name> --repo <url> [--keep N]
 
-# Primary site identifier used for the directory layout.
-read -r -p "Site name (example: app.mysite.com): " SITE_NAME
+  --site      Site name (example: app.mysite.com). Primary identifier used
+              for the directory layout. Required.
+  --repo      GitHub repo SSH URL (example: git@github.com:owner/repo.git).
+              Must already have the releases/shared/current layout that
+              06-folder-structure.sh creates. Required.
+  --keep      Releases to keep after each deploy. Default: 5. Values below
+              2 leave no release to roll back to.
+EOF
+}
+
+SITE_NAME=""
+REPO_URL=""
+KEEP_RELEASES=5
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--site)
+			SITE_NAME="${2:-}"
+			shift 2
+			;;
+		--repo)
+			REPO_URL="${2:-}"
+			shift 2
+			;;
+		--keep)
+			KEEP_RELEASES="${2:-}"
+			shift 2
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			echo "Unknown argument: $1" >&2
+			usage >&2
+			exit 1
+			;;
+	esac
+done
+
+# ---- Validate arguments ----
 
 if [[ -z "${SITE_NAME}" ]]; then
-	echo "Site name cannot be empty." >&2
+	echo "--site is required." >&2
+	usage >&2
 	exit 1
 fi
 
@@ -26,13 +69,9 @@ if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
 	exit 1
 fi
 
-# GitHub repo to deploy, over SSH, e.g. git@github.com:owner/repo.git. Must
-# already have the releases/shared/current layout that 06-folder-structure.sh
-# creates.
-read -r -p "GitHub repo SSH URL (example: git@github.com:owner/repo.git): " REPO_URL
-
 if [[ -z "${REPO_URL}" ]]; then
-	echo "Repo URL cannot be empty." >&2
+	echo "--repo is required." >&2
+	usage >&2
 	exit 1
 fi
 
@@ -43,13 +82,8 @@ if [[ ! "${REPO_URL}" =~ ^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+\.gi
 	exit 1
 fi
 
-# Releases to retain after each deploy. Values below 2 leave no release to
-# roll back to.
-read -r -p "Releases to keep after each deploy (default: 5): " KEEP_RELEASES
-KEEP_RELEASES="${KEEP_RELEASES:-5}"
-
 if [[ ! "${KEEP_RELEASES}" =~ ^[1-9][0-9]*$ ]]; then
-	echo "Releases to keep must be a positive integer." >&2
+	echo "--keep must be a positive integer." >&2
 	exit 1
 fi
 
