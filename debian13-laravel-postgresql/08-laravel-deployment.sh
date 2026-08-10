@@ -4,12 +4,13 @@
 set -euo pipefail
 
 # ****************************************************************************************************
-# Generate a standalone, re-runnable deploy.sh for the site whose atomic
+# Generate a standalone, re-runnable deploy.sh for a site whose atomic
 # releases/shared/current layout has already been created by
-# 05-folder-structure.sh in the current directory. The generated script is
-# what actually clones a branch from GitHub into a new release and swaps
-# current onto it; this script only writes that file out. Run this script
-# from inside the site's base directory (/var/www/<site>).
+# 05-folder-structure.sh. The generated script is what actually clones a
+# branch from GitHub into a new release and swaps current onto it; this
+# script only writes that file out. The operator is prompted for the site
+# name, matching 05-folder-structure.sh and 06-nginx-tls-vhost.sh -- this
+# script can be run from any directory.
 # ****************************************************************************************************
 
 usage() {
@@ -17,8 +18,8 @@ usage() {
 Usage:
   $(basename "$0") --repo <url> [--keep N]
 
-  Run this from inside the site's base directory (/var/www/<site>); the
-  site is identified by the current directory, not a flag.
+  You will be prompted for the site name; the generated deploy.sh is
+  written to /var/www/<site name>/deploy.sh.
 
   --repo      GitHub repo SSH URL (example: git@github.com:owner/repo.git).
               Must already have the releases/shared/current layout that
@@ -53,6 +54,27 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# ---- Preflight: sudo ----
+# Checked immediately after argument parsing, before validating --repo/--keep
+# or prompting for the site name, so a misconfigured host is reported before
+# the operator has typed anything -- matching 05-folder-structure.sh and
+# 06-nginx-tls-vhost.sh. -h/--help above still exits with zero side effects,
+# since it is handled during argument parsing, before this check runs.
+
+if ! command -v sudo >/dev/null 2>&1; then
+	echo "sudo is required but not installed." >&2
+	exit 1
+fi
+
+if ! sudo -n true 2>/dev/null; then
+	echo "This script needs sudo privileges to install the deployment script."
+	echo "You may be prompted for your sudo password during execution."
+	if ! sudo true; then
+		echo "Unable to obtain sudo privileges." >&2
+		exit 1
+	fi
+fi
+
 # ---- Validate arguments ----
 
 if [[ -z "${REPO_URL}" ]]; then
@@ -77,11 +99,31 @@ if [[ "${KEEP_RELEASES}" -lt 2 ]]; then
 	echo "Warning: keeping ${KEEP_RELEASES} release(s); rollback needs at least one older release on disk." >&2
 fi
 
-# ---- Derive paths and check the site's existing structure ----
-# BASE_DIR comes from the current directory -- run this script from inside
-# the site's base directory, not from a --site flag.
+# ---- Collect site name ----
+# Validated as a strict hostname, same as 05-folder-structure.sh: SITE_NAME
+# becomes part of BASE_DIR below, and the generated deploy.sh later runs
+# 'sudo chown -R' under that path, so a leading '-' or a '..' segment here is
+# a real hazard, not just cosmetic.
 
-BASE_DIR="$(pwd -P)"
+is_valid_hostname() {
+	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+}
+
+read -r -p "Site name (e.g., app.mysite.com): " SITE_NAME
+
+if [[ -z "${SITE_NAME}" ]]; then
+	echo "Site name cannot be empty." >&2
+	exit 1
+fi
+
+if ! is_valid_hostname "${SITE_NAME}"; then
+	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
+	exit 1
+fi
+
+# ---- Derive paths and check the site's existing structure ----
+
+BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
 SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
@@ -93,7 +135,7 @@ DEPLOYER_GROUP="deployer"
 # script only writes the deploy script, it does not provision directories.
 if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
 	echo "${BASE_DIR} does not have the expected releases/shared layout." >&2
-	echo "Run 05-folder-structure.sh here first." >&2
+	echo "Run 05-folder-structure.sh for '${SITE_NAME}' first, then re-run this script." >&2
 	exit 1
 fi
 
@@ -124,31 +166,12 @@ if ! getent group "${DEPLOYER_GROUP}" >/dev/null 2>&1; then
 	exit 1
 fi
 
-# ---- Preflight: sudo ----
-# Checked only now, after the cheaper input/structure/group checks above, so
-# a misconfigured or not-yet-provisioned site is reported without demanding
-# a sudo password first.
-
-if ! command -v sudo >/dev/null 2>&1; then
-	echo "sudo is required but not installed." >&2
-	exit 1
-fi
-
-if ! sudo -n true 2>/dev/null; then
-	echo "This script needs sudo privileges to install the deployment script."
-	echo "You may be prompted for your sudo password during execution."
-	if ! sudo true; then
-		echo "Unable to obtain sudo privileges." >&2
-		exit 1
-	fi
-fi
-
 # ---- Render deploy.sh ----
 # Rendered as a literal (single-quoted) heredoc so none of the generated
 # script's own $variables need escaping, then the placeholder tokens below
 # are swapped for real values with sed. REPO_URL and KEEP_RELEASES are
-# validated above and BASE_DIR comes from pwd -P, so none contain '|',
-# making it safe as the sed delimiter.
+# validated above and BASE_DIR is built from a validated SITE_NAME, so none
+# contain '|', making it safe as the sed delimiter.
 
 echo "Rendering ${DEPLOY_SCRIPT_PATH}..."
 
@@ -160,9 +183,9 @@ cat > "${TMP_DEPLOY_SCRIPT}" <<'DEPLOY_TEMPLATE_EOF'
 set -euo pipefail
 
 # Generated by 08-laravel-deployment.sh for '__BASE_DIR__'.
-# Rerun the generator from that directory to regenerate -- BASE_DIR/REPO_URL/
-# KEEP_RELEASES below are overwritten on every regeneration; do not hand-edit
-# them.
+# Rerun the generator and enter this site name again to regenerate --
+# BASE_DIR/REPO_URL/KEEP_RELEASES below are overwritten on every
+# regeneration; do not hand-edit them.
 
 BASE_DIR="__BASE_DIR__"
 REPO_URL="__REPO_URL__"
@@ -354,7 +377,7 @@ sudo install -m 750 -o deployer -g "${DEPLOYER_GROUP}" "${TMP_DEPLOY_SCRIPT}" "$
 rm -f "${TMP_DEPLOY_SCRIPT}"
 
 echo "Done."
-echo "Site: $(basename "${BASE_DIR}")"
+echo "Site: ${SITE_NAME}"
 echo "Repo: ${REPO_URL}"
 echo "Keep releases: ${KEEP_RELEASES}"
 echo "Deployment script: ${DEPLOY_SCRIPT_PATH}"
