@@ -1,0 +1,116 @@
+# ****************************************************************************************************
+# Nginx vhost template: React (or other) single-page app build served as
+# static files, with client-side routing -- unlike static-web.conf.template,
+# unknown paths fall back to index.html instead of 404ing so routes like
+# /dashboard/settings resolve correctly on a hard refresh. Pairs with a
+# release layout where <site>/current points at the build output directory
+# directly (e.g. dist/ or build/), same convention 09-static-web-deployment.sh
+# uses.
+#
+# Two-phase rollout, same as 07-nginx-tls-vhost.sh: nginx refuses to load a
+# server block whose ssl_certificate file doesn't exist yet, so on first
+# issuance install only the "listen 80" server block below, reload nginx, run
+# certbot's webroot plugin against __ACME_WEBROOT__, THEN add the "listen 443"
+# server block and reload again. Renewals need no such dance -- the HTTP block
+# below keeps serving the ACME challenge indefinitely, including after the
+# HTTPS block is added.
+#
+# Placeholders (substitute, e.g. with sed, before installing to
+# /etc/nginx/sites-available/<site>.conf):
+#   __SERVER_NAMES__   space-separated server_name value(s), e.g. "example.com www.example.com"
+#   __ACME_WEBROOT__   directory certbot's webroot plugin writes challenge files into; must already exist and be readable by nginx (e.g. /var/www/<site>/current)
+#   __WEBROOT__        document root served over HTTPS -- the build output directory (e.g. /var/www/<site>/current)
+#   __ACCESS_LOG__     e.g. /var/www/<site>/shared/logs/access.log
+#   __ERROR_LOG__      e.g. /var/www/<site>/shared/logs/error.log
+#   __LE_DOMAIN__      Let's Encrypt certificate domain (must match certbot -d); used to build the /etc/letsencrypt/live/__LE_DOMAIN__/ cert paths
+# ****************************************************************************************************
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name __SERVER_NAMES__;
+	server_tokens off;
+
+	access_log __ACCESS_LOG__;
+	error_log __ERROR_LOG__;
+
+	location ^~ /.well-known/acme-challenge/ {
+		default_type "text/plain";
+		root __ACME_WEBROOT__;
+		allow all;
+		try_files $uri =404;
+	}
+
+	location / {
+		return 301 https://$host$request_uri;
+	}
+}
+
+server {
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	http2 on;
+	server_name __SERVER_NAMES__;
+	root __WEBROOT__;
+	server_tokens off;
+
+	ssl_certificate /etc/letsencrypt/live/__LE_DOMAIN__/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/__LE_DOMAIN__/privkey.pem;
+	ssl_protocols TLSv1.2 TLSv1.3;
+	ssl_prefer_server_ciphers off;
+
+	add_header X-Frame-Options "SAMEORIGIN" always;
+	add_header X-Content-Type-Options "nosniff" always;
+	add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+	index index.html;
+	charset utf-8;
+
+	access_log __ACCESS_LOG__;
+	error_log __ERROR_LOG__;
+
+	location ^~ /.well-known/acme-challenge/ {
+		default_type "text/plain";
+		root __ACME_WEBROOT__;
+		allow all;
+		try_files $uri =404;
+	}
+
+	# Client-side routing: serve the file if it exists on disk, otherwise hand
+	# the request to index.html and let the React router decide what to render.
+	location / {
+		try_files $uri $uri/ /index.html;
+	}
+
+	# index.html is not content-hashed, so it must be revalidated on every
+	# request -- otherwise a browser or CDN keeps serving the old entrypoint
+	# after a deploy, and the new (hashed) bundle it references never loads.
+	location = /index.html {
+		add_header Cache-Control "no-cache";
+		add_header X-Frame-Options "SAMEORIGIN" always;
+		add_header X-Content-Type-Options "nosniff" always;
+		add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+	}
+
+	location = /favicon.ico { access_log off; log_not_found off; }
+	location = /robots.txt  { access_log off; log_not_found off; }
+
+	# Build tooling (CRA/Vite/etc.) content-hashes these filenames, so a long
+	# cache lifetime is safe -- a changed file gets a new URL, not a stale hit.
+	# Nginx stops inheriting the server-level add_header directives as soon as
+	# a location defines one of its own, so the security headers are repeated
+	# here or these responses would be served without them.
+	location ~* \.(?:css|js|jpg|jpeg|gif|png|webp|svg|ico|ttf|otf|woff|woff2)$ {
+		expires 1y;
+		access_log off;
+		add_header Cache-Control "public, immutable";
+		add_header X-Frame-Options "SAMEORIGIN" always;
+		add_header X-Content-Type-Options "nosniff" always;
+		add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+	}
+
+	# Block access to hidden files except the ACME challenge directory.
+	location ~ /\.(?!well-known).* {
+		deny all;
+	}
+}
