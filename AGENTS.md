@@ -33,6 +33,16 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
   of `atomic-deployment-setup.sh`'s monolithic flow into standalone structure/nginx-TLS/database
   steps. `atomic-deployment-setup.sh` still exists in this repo but is now superseded by the three
   split scripts above.
+- `09-deployment.sh` is a standalone, generic deploy script -- unlike
+  `08-laravel-deployment.sh`, it has no framework-specific steps (no
+  composer/npm/artisan), no shared-file symlinking, and no user/ownership
+  handling. Given `--repo`, `--branch`, and `--dir`, it clones the branch
+  into a new timestamped release under `<dir>/releases`, swaps
+  `<dir>/current` onto it, and prunes releases beyond `--keep` (default
+  5). `--rollback --dir <path>` flips `current` back to the release
+  immediately older than the one it points at now. It deploys, it does
+  not provision -- `<dir>/releases` must already exist before the first
+  run.
 
 There is no application source tree, asset directory, or automated test suite. Keep logic in focused scripts rather than unrelated top-level files.
 
