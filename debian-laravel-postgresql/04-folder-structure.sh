@@ -106,10 +106,77 @@ sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_BOOTSTRAP_CACHE_DIR}" \
 				 "${ACTIVE_RELEASE_DIR}/public"
 
-# Ensure shared .env exists -- touch is a no-op on an existing file -- and lock
-# it down immediately, even empty, before handing ownership of the whole tree
-# to deployer:www-data so the rest of this script can operate.
-sudo touch "${SHARED_ENV_FILE}"
+# Seed the shared .env with a bare template on first creation only -- an
+# existing .env may already hold real secrets from a prior run, so a rerun
+# must never overwrite its content. Placeholders (e.g. {{APP_KEY}}) are left
+# for the deployer to fill in by hand; this script does no substitution.
+if [[ ! -e "${SHARED_ENV_FILE}" ]]; then
+	sudo tee "${SHARED_ENV_FILE}" >/dev/null <<'ENV_TEMPLATE'
+APP_NAME={{APP_NAME}}
+APP_ENV=production
+APP_KEY={{APP_KEY}}
+APP_DEBUG=false
+APP_URL={{APP_URL}}
+
+APP_LOCALE=en
+APP_FALLBACK_LOCALE=en
+APP_FAKER_LOCALE=en_US
+
+APP_MAINTENANCE_DRIVER=file
+
+BCRYPT_ROUNDS=12
+
+REGISTRATION_LINK_TTL=1440
+
+LOG_CHANNEL=stack
+LOG_STACK=single
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+DB_CONNECTION=pgsql
+DB_HOST={{DB_HOST}}
+DB_PORT=5432
+DB_DATABASE={{DB_DATABASE}}
+DB_USERNAME={{DB_USERNAME}}
+DB_PASSWORD={{DB_PASSWORD}}
+
+SESSION_DRIVER=database
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+SESSION_DOMAIN=null
+
+BROADCAST_CONNECTION=log
+FILESYSTEM_DISK=local
+QUEUE_CONNECTION=database
+
+CACHE_STORE=file
+
+MEMCACHED_HOST=
+
+REDIS_CLIENT=
+REDIS_HOST=
+REDIS_PASSWORD=
+REDIS_PORT=
+
+MAIL_MAILER=smtp
+MAIL_HOST={{MAIL_HOST}}
+MAIL_PORT={{MAIL_PORT}}
+MAIL_USERNAME={{MAIL_USERNAME}}
+MAIL_PASSWORD={{MAIL_PASSWORD}}
+MAIL_ENCRYPTION={{MAIL_ENCRYPTION}}
+MAIL_FROM_ADDRESS="{{MAIL_FROM_ADDRESS}}"
+MAIL_FROM_NAME="${APP_NAME}"
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=
+AWS_BUCKET=
+AWS_USE_PATH_STYLE_ENDPOINT=
+
+VITE_APP_NAME="${APP_NAME}"
+ENV_TEMPLATE
+fi
 sudo chmod 640 "${SHARED_ENV_FILE}"
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
 
