@@ -6,10 +6,15 @@ set -euo pipefail
 # ****************************************************************************************************
 # Own the site's Nginx vhost and Let's Encrypt/certbot TLS issuance as a
 # standalone, re-runnable step, separate from directory-structure provisioning
-# (06-folder-structure.sh) and database provisioning (05-postgresql-database.sh).
+# (05-folder-structure.sh) and database provisioning (05-postgresql-database.sh).
+#
+# Run this script from inside the site's base directory (/var/www/<site>),
+# matching the convention 08-laravel-deployment.sh uses -- the site name is
+# no longer typed in, it's read out of APP_URL in the shared .env that
+# 05-folder-structure.sh already seeded.
 #
 # Standalone and re-runnable: no dependency on 05-postgresql-database.sh having
-# run, and it never touches Postgres. It does depend on 06-folder-structure.sh
+# run, and it never touches Postgres. It does depend on 05-folder-structure.sh
 # having already created ${BASE_DIR}/current/public -- checked below rather
 # than assumed, since a vhost pointed at a webroot that doesn't exist yet would
 # only fail later, deep into the certbot request, with a much less obvious
@@ -54,31 +59,60 @@ echo "Point A/AAAA records to this server first, or Let's Encrypt validation can
 # Validate a value that is used as both a hostname and a path segment.
 #
 # A plain "letters, numbers, dots, and hyphens" character check is not enough
-# here: '.' and '..' consist entirely of allowed characters, so they pass it,
-# while BASE_DIR/${LE_DOMAIN} then escape their intended directory -- '..'
-# turns /var/www/<site> into /var and /etc/letsencrypt/live/<domain> into
-# /etc/letsencrypt. Requiring real hostname labels (alphanumeric at both
-# ends, hyphens only inside, joined by single dots) rejects '.', '..', and a
-# leading '-' that certbot could otherwise read as an option rather than a
-# domain.
+# here: it would let '/' or '..' segments through, and those then escape the
+# intended directory in /etc/nginx/sites-available/${SITE_NAME}.conf,
+# /etc/nginx/sites-enabled/${SITE_NAME}.conf, and
+# /etc/letsencrypt/live/${LE_DOMAIN}. Requiring real hostname labels
+# (alphanumeric at both ends, hyphens only inside, joined by single dots)
+# rejects '/', '.', '..', and a leading '-' that certbot could otherwise read
+# as an option rather than a domain.
 is_valid_hostname() {
 	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 
-# ---- Collect input ----
+# ---- Derive the site from the current directory and its shared .env ----
 
-# Primary site identifier used to locate the webroot and root the vhost.
-read -r -p "Site name (example: app.mysite.com): " SITE_NAME
+BASE_DIR="$(pwd -P)"
+CURRENT_LINK="${BASE_DIR}/current"
+SHARED_DIR="${BASE_DIR}/shared"
+SHARED_ENV_FILE="${SHARED_DIR}/.env"
+
+if [[ ! -f "${SHARED_ENV_FILE}" ]]; then
+	echo "${SHARED_ENV_FILE} not found." >&2
+	echo "Run this script from inside the site's base directory (/var/www/<site>) after 05-folder-structure.sh has created it." >&2
+	exit 1
+fi
+
+# APP_URL is the domain 05-folder-structure.sh recorded for this site; reuse
+# it instead of asking the operator to retype the site name.
+APP_URL_LINE="$(grep -m 1 '^APP_URL=' "${SHARED_ENV_FILE}" || true)"
+
+if [[ -z "${APP_URL_LINE}" ]]; then
+	echo "APP_URL not set in ${SHARED_ENV_FILE}." >&2
+	exit 1
+fi
+
+SITE_NAME="${APP_URL_LINE#APP_URL=}"
+SITE_NAME="${SITE_NAME#http://}"
+SITE_NAME="${SITE_NAME#https://}"
+SITE_NAME="${SITE_NAME%%/*}"
 
 if [[ -z "${SITE_NAME}" ]]; then
-	echo "Site name cannot be empty." >&2
+	echo "Could not derive a site name from APP_URL in ${SHARED_ENV_FILE}." >&2
 	exit 1
 fi
 
+# Re-validate even though 05-folder-structure.sh already validated the value it
+# wrote: APP_URL is used below both as the Nginx server_name default and as a
+# path segment in NGINX_AVAILABLE/NGINX_ENABLED, so a hand-edited .env with a
+# stray '..' or '/' must be rejected here rather than trusted.
 if ! is_valid_hostname "${SITE_NAME}"; then
-	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
+	echo "Site name derived from APP_URL ('${SITE_NAME}') is not a valid hostname." >&2
+	echo "Check APP_URL in ${SHARED_ENV_FILE}." >&2
 	exit 1
 fi
+
+# ---- Collect remaining input ----
 
 # Allow distinct HTTP server_name and certificate domain when needed.
 read -r -p "Server name for Nginx (default: ${SITE_NAME}): " SERVER_NAME
@@ -99,11 +133,7 @@ if [[ -z "${LE_EMAIL}" ]]; then
 	exit 1
 fi
 
-# ---- Derive paths and check the one hard ordering dependency ----
-
-BASE_DIR="/var/www/${SITE_NAME}"
-CURRENT_LINK="${BASE_DIR}/current"
-SHARED_DIR="${BASE_DIR}/shared"
+# ---- Check the one hard ordering dependency ----
 
 # The webroot this vhost roots at, and that certbot serves the ACME challenge
 # from, must already exist. Fail here with an actionable message rather than
@@ -111,7 +141,7 @@ SHARED_DIR="${BASE_DIR}/shared"
 # with a confusing error further down.
 if [[ ! -d "${CURRENT_LINK}/public" ]]; then
 	echo "${CURRENT_LINK}/public does not exist." >&2
-	echo "Run 06-folder-structure.sh for '${SITE_NAME}' first, then re-run this script." >&2
+	echo "Run 05-folder-structure.sh for '${SITE_NAME}' first, then re-run this script." >&2
 	exit 1
 fi
 
