@@ -1,0 +1,104 @@
+# ****************************************************************************************************
+# Nginx vhost template: Node.js application reverse-proxied from a process
+# nginx does not serve files for directly (Express, Next.js in server mode,
+# Nest, etc. -- typically kept alive by systemd or pm2 on a loopback port).
+# Unlike the static-web/laravel/reactjs templates, there is no on-disk
+# document root for location / to fall back to, so __ACME_WEBROOT__ must be a
+# dedicated, stable directory reserved for ACME challenge files -- it must NOT
+# be a path inside an atomic-deploy release tree (e.g. <site>/current), since
+# that symlink is swapped or pruned independently of the certificate
+# lifecycle and would leave certbot pointed at a target that can disappear
+# out from under it. Create it once, e.g.:
+#   sudo mkdir -p /var/www/<site>/acme-challenge
+#   sudo chown deployer:www-data /var/www/<site>/acme-challenge
+#
+# Two-phase rollout, same as 07-nginx-tls-vhost.sh: nginx refuses to load a
+# server block whose ssl_certificate file doesn't exist yet, so on first
+# issuance install only the "listen 80" server block below, reload nginx, run
+# certbot's webroot plugin against __ACME_WEBROOT__, THEN add the "listen 443"
+# server block and reload again. Renewals need no such dance -- the HTTP block
+# below keeps serving the ACME challenge indefinitely, including after the
+# HTTPS block is added.
+#
+# This template references $connection_upgrade, which nginx does not define
+# by default. Add this once to the `http { }` block of /etc/nginx/nginx.conf
+# (outside any server block) if it isn't already there -- it lets a WebSocket
+# upgrade request keep its connection open while plain HTTP requests still
+# close theirs after each response:
+#
+#   map $http_upgrade $connection_upgrade {
+#       default upgrade;
+#       ''      close;
+#   }
+#
+# Placeholders (substitute, e.g. with sed, before installing to
+# /etc/nginx/sites-available/<site>.conf):
+#   __SERVER_NAMES__   space-separated server_name value(s), e.g. "app.example.com"
+#   __ACME_WEBROOT__   dedicated static directory for challenge files (see note above, e.g. /var/www/<site>/acme-challenge)
+#   __ACCESS_LOG__     e.g. /var/www/<site>/shared/logs/access.log
+#   __ERROR_LOG__      e.g. /var/www/<site>/shared/logs/error.log
+#   __LE_DOMAIN__      Let's Encrypt certificate domain (must match certbot -d); used to build the /etc/letsencrypt/live/__LE_DOMAIN__/ cert paths
+#   __NODE_UPSTREAM__  host:port the Node process listens on, e.g. 127.0.0.1:3000
+# ****************************************************************************************************
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name __SERVER_NAMES__;
+	server_tokens off;
+
+	access_log __ACCESS_LOG__;
+	error_log __ERROR_LOG__;
+
+	location ^~ /.well-known/acme-challenge/ {
+		default_type "text/plain";
+		root __ACME_WEBROOT__;
+		allow all;
+		try_files $uri =404;
+	}
+
+	location / {
+		return 301 https://$host$request_uri;
+	}
+}
+
+server {
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	http2 on;
+	server_name __SERVER_NAMES__;
+	server_tokens off;
+
+	ssl_certificate /etc/letsencrypt/live/__LE_DOMAIN__/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/__LE_DOMAIN__/privkey.pem;
+	ssl_protocols TLSv1.2 TLSv1.3;
+	ssl_prefer_server_ciphers off;
+
+	add_header X-Frame-Options "SAMEORIGIN" always;
+	add_header X-Content-Type-Options "nosniff" always;
+	add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+	access_log __ACCESS_LOG__;
+	error_log __ERROR_LOG__;
+
+	location ^~ /.well-known/acme-challenge/ {
+		default_type "text/plain";
+		root __ACME_WEBROOT__;
+		allow all;
+		try_files $uri =404;
+	}
+
+	location / {
+		proxy_pass http://__NODE_UPSTREAM__;
+		proxy_http_version 1.1;
+		proxy_set_header Host $host;
+		proxy_set_header X-Real-IP $remote_addr;
+		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+		proxy_set_header X-Forwarded-Proto $scheme;
+
+		# Lets the Node app terminate WebSocket connections (HMR, socket.io,
+		# etc.) through the proxy instead of the upgrade request hanging.
+		proxy_set_header Upgrade $http_upgrade;
+		proxy_set_header Connection $connection_upgrade;
+	}
+}
