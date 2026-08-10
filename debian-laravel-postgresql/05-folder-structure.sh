@@ -48,6 +48,21 @@ if ! command -v openssl >/dev/null 2>&1; then
 	exit 1
 fi
 
+# Validate a value that is used as both a hostname and a path segment.
+#
+# A plain "letters, numbers, dots, and hyphens" character check is not enough
+# here: '.' and '..' consist entirely of allowed characters, so they pass it,
+# and BASE_DIR then resolves to /var/www or /var rather than to a site
+# directory. That aims the unconditional 'chown -R' and 'find -exec chmod'
+# pass at the bottom of this script at every other site on the host, or at
+# the whole /var tree -- re-owning /var/lib/postgresql and friends to
+# deployer:www-data. Requiring real hostname labels (alphanumeric at both
+# ends, hyphens only inside, joined by single dots) rejects '.', '..', and a
+# leading '-' that could otherwise be read as an option by a later command.
+is_valid_hostname() {
+	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+}
+
 # ---- Collect input ----
 
 # Primary site identifier used for the directory layout. Also doubles as the
@@ -60,9 +75,8 @@ if [[ -z "${SITE_NAME}" ]]; then
 	exit 1
 fi
 
-# Keep hostname/domain-like values strict since this becomes a path segment.
-if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-	echo "Site name can only contain letters, numbers, dots, and hyphens." >&2
+if ! is_valid_hostname "${SITE_NAME}"; then
+	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
 	exit 1
 fi
 

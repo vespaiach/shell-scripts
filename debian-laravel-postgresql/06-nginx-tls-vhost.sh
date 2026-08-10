@@ -51,6 +51,20 @@ fi
 echo "Reminder: configure your domain DNS record(s) before running this setup."
 echo "Point A/AAAA records to this server first, or Let's Encrypt validation can fail."
 
+# Validate a value that is used as both a hostname and a path segment.
+#
+# A plain "letters, numbers, dots, and hyphens" character check is not enough
+# here: '.' and '..' consist entirely of allowed characters, so they pass it,
+# while BASE_DIR/${LE_DOMAIN} then escape their intended directory -- '..'
+# turns /var/www/<site> into /var and /etc/letsencrypt/live/<domain> into
+# /etc/letsencrypt. Requiring real hostname labels (alphanumeric at both
+# ends, hyphens only inside, joined by single dots) rejects '.', '..', and a
+# leading '-' that certbot could otherwise read as an option rather than a
+# domain.
+is_valid_hostname() {
+	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+}
+
 # ---- Collect input ----
 
 # Primary site identifier used to locate the webroot and root the vhost.
@@ -61,9 +75,8 @@ if [[ -z "${SITE_NAME}" ]]; then
 	exit 1
 fi
 
-# Keep hostname/domain-like values strict since this becomes a path segment.
-if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-	echo "Site name can only contain letters, numbers, dots, and hyphens." >&2
+if ! is_valid_hostname "${SITE_NAME}"; then
+	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
 	exit 1
 fi
 
@@ -74,8 +87,8 @@ SERVER_NAME="${SERVER_NAME:-$SITE_NAME}"
 read -r -p "Let's Encrypt certificate domain (default: ${SITE_NAME}): " LE_DOMAIN
 LE_DOMAIN="${LE_DOMAIN:-$SITE_NAME}"
 
-if [[ ! "${LE_DOMAIN}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-	echo "Let's Encrypt domain can only contain letters, numbers, dots, and hyphens." >&2
+if ! is_valid_hostname "${LE_DOMAIN}"; then
+	echo "Let's Encrypt domain must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
 	exit 1
 fi
 

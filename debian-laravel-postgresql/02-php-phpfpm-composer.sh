@@ -17,6 +17,30 @@ PHP_VERSION="${1:-8.5}"
 # Install PHP and its common extensions from the Sury repository.
 # ****************************************************************************************************
 
+# Install Sury's signing key first. The sources entry below pins the repo to
+# this keyring, so without it every subsequent apt run rejects the repository
+# as unsigned and no php${PHP_VERSION} package is installable at all.
+#
+# Unlike PGDG's key in 04-postgresql.sh, what Sury publishes at apt.gpg is
+# already a binary keyring rather than an ASCII-armored .asc, so it is
+# installed as-is -- piping it through 'gpg --dearmor' would be relying on
+# dearmor's pass-through behaviour for input that was never armored.
+SURY_KEYRING="$(mktemp)"
+curl -fsSL -o "${SURY_KEYRING}" https://packages.sury.org/php/apt.gpg
+
+# A truncated or error-page download would install a keyring that verifies
+# nothing, which surfaces later as a confusing apt signature failure.
+if ! gpg --show-keys --with-colons "${SURY_KEYRING}" >/dev/null 2>&1; then
+	rm -f "${SURY_KEYRING}"
+	echo "Downloaded Sury signing key is not a valid OpenPGP keyring; refusing to install it." >&2
+	exit 1
+fi
+
+# install(1) sets the 0644 mode apt requires as part of the copy -- mktemp
+# creates the file 0600, which apt cannot read as the _apt user.
+sudo install -m 0644 -o root -g root "${SURY_KEYRING}" /usr/share/keyrings/sury-php.gpg
+rm -f "${SURY_KEYRING}"
+
 # Add the Sury PHP APT repository for the current Debian codename.
 echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
 

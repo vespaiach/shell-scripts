@@ -37,6 +37,19 @@ if ! command -v psql >/dev/null 2>&1; then
 	exit 1
 fi
 
+# Validate a value that is used as both a hostname and a path segment.
+#
+# A plain "letters, numbers, dots, and hyphens" character check is not enough
+# here: '.' and '..' consist entirely of allowed characters, so they pass it,
+# and SHARED_ENV_FILE then points outside the site tree -- '..' resolves
+# /var/www/<site>/shared/.env to /var/shared/.env, which this script would
+# create and write live database credentials into. Requiring real hostname
+# labels (alphanumeric at both ends, hyphens only inside, joined by single
+# dots) rejects '.' and '..' along with a leading '-'.
+is_valid_hostname() {
+	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
+}
+
 # ---- Collect input ----
 
 read -r -p "Laravel PostgreSQL database name: " DB_DATABASE
@@ -75,8 +88,8 @@ fi
 # below. Leave blank to skip -- this script has no other need for a site.
 read -r -p "Site name to sync .env for (example: app.mysite.com, leave blank to skip): " SITE_NAME
 
-if [[ -n "${SITE_NAME}" && ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-	echo "Site name can only contain letters, numbers, dots, and hyphens." >&2
+if [[ -n "${SITE_NAME}" ]] && ! is_valid_hostname "${SITE_NAME}"; then
+	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
 	exit 1
 fi
 
