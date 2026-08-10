@@ -42,9 +42,17 @@ if ! getent group "${WEB_GROUP}" >/dev/null 2>&1; then
 	exit 1
 fi
 
+# APP_KEY generation below needs openssl.
+if ! command -v openssl >/dev/null 2>&1; then
+	echo "openssl is required to generate APP_KEY but is not installed." >&2
+	exit 1
+fi
+
 # ---- Collect input ----
 
-# Primary site identifier used for the directory layout.
+# Primary site identifier used for the directory layout. Also doubles as the
+# domain APP_URL is derived from, since this is expected to be the site's
+# hostname (example: app.mysite.com).
 read -r -p "Site name (example: app.mysite.com): " SITE_NAME
 
 if [[ -z "${SITE_NAME}" ]]; then
@@ -58,6 +66,14 @@ if [[ ! "${SITE_NAME}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
 	exit 1
 fi
 
+# Only used to seed .env on first creation; ignored on reruns.
+read -r -p "Application name (APP_NAME): " APP_NAME
+
+if [[ -z "${APP_NAME}" ]]; then
+	echo "Application name cannot be empty." >&2
+	exit 1
+fi
+
 # ---- Derive paths ----
 
 BASE_DIR="/var/www/${SITE_NAME}"
@@ -67,6 +83,16 @@ CURRENT_LINK="${BASE_DIR}/current"
 SHARED_STORAGE_DIR="${SHARED_DIR}/storage"
 SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
 SHARED_ENV_FILE="${SHARED_DIR}/.env"
+
+# ---- Derive .env values ----
+
+# APP_URL is derived from the site name rather than asked separately -- it's
+# already the domain this site is served on.
+APP_URL="https://${SITE_NAME}"
+
+# Laravel's own APP_KEY format: base64: followed by a base64-encoded
+# 32-byte key, the same shape `php artisan key:generate` produces.
+APP_KEY="base64:$(openssl rand -base64 32)"
 
 # ---- Create, or adopt, the release structure ----
 
@@ -108,10 +134,12 @@ sudo mkdir -p "${RELEASES_DIR}" \
 
 # Seed the shared .env with a bare template on first creation only -- an
 # existing .env may already hold real secrets from a prior run, so a rerun
-# must never overwrite its content. Placeholders (e.g. {{APP_KEY}}) are left
-# for the deployer to fill in by hand; this script does no substitution.
+# must never overwrite its content. APP_NAME, APP_KEY, APP_URL, and DB_HOST
+# are filled in below; the remaining placeholders (e.g. {{DB_DATABASE}},
+# {{MAIL_HOST}}) are left for later scripts (07-database.sh, etc.) or the
+# deployer to fill in by hand.
 if [[ ! -e "${SHARED_ENV_FILE}" ]]; then
-	sudo tee "${SHARED_ENV_FILE}" >/dev/null <<'ENV_TEMPLATE'
+	ENV_TEMPLATE_CONTENT="$(cat <<'ENV_TEMPLATE'
 APP_NAME={{APP_NAME}}
 APP_ENV=production
 APP_KEY={{APP_KEY}}
@@ -176,6 +204,34 @@ AWS_USE_PATH_STYLE_ENDPOINT=
 
 VITE_APP_NAME="${APP_NAME}"
 ENV_TEMPLATE
+)"
+
+	# Only the four placeholders resolved above are substituted here; every
+	# other line, including remaining {{...}} placeholders, comments, and
+	# blank lines, passes through unchanged. Values come in via ENVIRON
+	# rather than awk -v so no escaping is needed for whatever characters
+	# end up in APP_NAME or APP_KEY.
+	APP_NAME="${APP_NAME}" \
+	APP_KEY="${APP_KEY}" \
+	APP_URL="${APP_URL}" \
+	DB_HOST="localhost" \
+	awk '
+		BEGIN {
+			n = split("APP_NAME APP_KEY APP_URL DB_HOST", keys, " ")
+		}
+		{
+			replaced = 0
+			for (i = 1; i <= n; i++) {
+				k = keys[i]
+				if (index($0, k "=") == 1) {
+					print k "=" ENVIRON[k]
+					replaced = 1
+					break
+				}
+			}
+			if (!replaced) print $0
+		}
+	' <<<"${ENV_TEMPLATE_CONTENT}" | sudo tee "${SHARED_ENV_FILE}" >/dev/null
 fi
 sudo chmod 640 "${SHARED_ENV_FILE}"
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
