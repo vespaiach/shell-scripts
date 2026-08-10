@@ -5,13 +5,14 @@ set -euo pipefail
 
 # ****************************************************************************************************
 # Generic, standalone deploy script: clones a branch from GitHub into a new
-# timestamped release under <dir>/releases, swaps <dir>/current onto it, and
-# prunes releases beyond --keep. --rollback flips current back to the release
-# immediately older than the one it points at now. Unlike
-# 08-laravel-deployment.sh, this script has no framework-specific steps (no
-# composer/npm/artisan), no shared-file symlinking, and no user/ownership
-# handling -- it only clones and swaps a symlink. <dir>/releases must already
-# exist; this script deploys, it does not provision.
+# timestamped release under <dir>/releases, swaps <dir>/current onto that
+# release's dist/ subdirectory, and prunes releases beyond --keep. --rollback
+# flips current back to the dist/ subdirectory of the release immediately
+# older than the one it points at now. Unlike 08-laravel-deployment.sh, this
+# script has no framework-specific steps (no composer/npm/artisan), no
+# shared-file symlinking, and no user/ownership handling -- it only clones
+# and swaps a symlink. <dir>/releases must already exist; this script
+# deploys, it does not provision.
 # ****************************************************************************************************
 
 usage() {
@@ -25,8 +26,9 @@ Usage:
   --dir       Base directory containing a releases/ directory and, after
               the first deploy, a current symlink. Always required.
   --keep      Number of releases to retain after pruning. Default: 5.
-  --rollback  Roll 'current' back to the release immediately older than the
-              one it points at now, instead of deploying.
+  --rollback  Roll 'current' back to the dist/ subdirectory of the release
+              immediately older than the one it points at now, instead of
+              deploying.
 EOF
 }
 
@@ -121,8 +123,8 @@ if [[ "${ROLLBACK}" -eq 1 ]]; then
 		exit 1
 	fi
 
-	CURRENT_RELEASE="$(cd "${CURRENT_LINK}" && pwd -P)"
-	CURRENT_RELEASE_NAME="$(basename "${CURRENT_RELEASE}")"
+	CURRENT_RELEASE_DIST="$(cd "${CURRENT_LINK}" && pwd -P)"
+	CURRENT_RELEASE_NAME="$(basename "$(dirname "${CURRENT_RELEASE_DIST}")")"
 
 	PREVIOUS_RELEASE_NAME="$(find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
 		| sort -r \
@@ -133,10 +135,15 @@ if [[ "${ROLLBACK}" -eq 1 ]]; then
 		exit 1
 	fi
 
-	PREVIOUS_RELEASE_DIR="${RELEASES_DIR}/${PREVIOUS_RELEASE_NAME}"
+	PREVIOUS_RELEASE_DIST="${RELEASES_DIR}/${PREVIOUS_RELEASE_NAME}/dist"
+
+	if [[ ! -d "${PREVIOUS_RELEASE_DIST}" ]]; then
+		echo "${PREVIOUS_RELEASE_DIST} does not exist; cannot roll back to it." >&2
+		exit 1
+	fi
 
 	echo "Rolling back current from ${CURRENT_RELEASE_NAME} to ${PREVIOUS_RELEASE_NAME}..."
-	ln -sfn "${PREVIOUS_RELEASE_DIR}" "${CURRENT_LINK}"
+	ln -sfn "${PREVIOUS_RELEASE_DIST}" "${CURRENT_LINK}"
 
 	echo "Done."
 	echo "Rolled back: ${CURRENT_RELEASE_NAME} -> ${PREVIOUS_RELEASE_NAME}"
@@ -150,8 +157,14 @@ NEW_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
 echo "Deploying branch '${BRANCH}' to ${NEW_RELEASE_DIR}..."
 git clone --branch "${BRANCH}" --single-branch --depth 1 "${REPO}" "${NEW_RELEASE_DIR}"
 
-echo "Swapping current -> ${NEW_RELEASE_DIR}..."
-ln -sfn "${NEW_RELEASE_DIR}" "${CURRENT_LINK}"
+NEW_RELEASE_DIST="${NEW_RELEASE_DIR}/dist"
+if [[ ! -d "${NEW_RELEASE_DIST}" ]]; then
+	echo "${NEW_RELEASE_DIST} does not exist in the cloned branch; not swapping current." >&2
+	exit 1
+fi
+
+echo "Swapping current -> ${NEW_RELEASE_DIST}..."
+ln -sfn "${NEW_RELEASE_DIST}" "${CURRENT_LINK}"
 
 echo "Pruning releases beyond ${KEEP_RELEASES}..."
 mapfile -t OLD_RELEASES < <(find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -r | tail -n +$((KEEP_RELEASES + 1)))

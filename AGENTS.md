@@ -38,8 +38,10 @@ This repository contains Bash scripts for provisioning Debian servers. All maint
   composer/npm/artisan), no shared-file symlinking, and no user/ownership
   handling. Given `--repo`, `--branch`, and `--dir`, it clones the branch
   into a new timestamped release under `<dir>/releases`, swaps
-  `<dir>/current` onto it, and prunes releases beyond `--keep` (default
-  5). `--rollback --dir <path>` flips `current` back to the release
+  `<dir>/current` onto that release's `dist/` subdirectory, and prunes
+  releases beyond `--keep` (default 5); it fails without swapping if
+  `dist/` isn't present in the cloned branch. `--rollback --dir <path>`
+  flips `current` back to the `dist/` subdirectory of the release
   immediately older than the one it points at now. It deploys, it does
   not provision -- `<dir>/releases` must already exist before the first
   run.
