@@ -86,7 +86,7 @@ fi
 
 # Optional: site whose shared .env should be synced with the DB_* values
 # below. Leave blank to skip -- this script has no other need for a site.
-read -r -p "Site name to sync .env for (example: app.mysite.com, leave blank to skip): " SITE_NAME
+read -r -p "Site name (e.g., app.mysite.com): " SITE_NAME
 
 if [[ -n "${SITE_NAME}" ]] && ! is_valid_hostname "${SITE_NAME}"; then
 	echo "Site name must be a hostname: dot-separated labels of letters, numbers, and inner hyphens (example: app.mysite.com)." >&2
