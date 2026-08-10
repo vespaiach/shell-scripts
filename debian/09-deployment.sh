@@ -113,6 +113,36 @@ if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	exit 1
 fi
 
+# ---- Rollback mode ----
+
+if [[ "${ROLLBACK}" -eq 1 ]]; then
+	if [[ ! -L "${CURRENT_LINK}" ]]; then
+		echo "${CURRENT_LINK} is not a symlink; nothing to roll back." >&2
+		exit 1
+	fi
+
+	CURRENT_RELEASE="$(cd "${CURRENT_LINK}" && pwd -P)"
+	CURRENT_RELEASE_NAME="$(basename "${CURRENT_RELEASE}")"
+
+	PREVIOUS_RELEASE_NAME="$(find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+		| sort -r \
+		| awk -v cur="${CURRENT_RELEASE_NAME}" 'seen{print; exit} $0==cur{seen=1}')"
+
+	if [[ -z "${PREVIOUS_RELEASE_NAME}" ]]; then
+		echo "No older release to roll back to." >&2
+		exit 1
+	fi
+
+	PREVIOUS_RELEASE_DIR="${RELEASES_DIR}/${PREVIOUS_RELEASE_NAME}"
+
+	echo "Rolling back current from ${CURRENT_RELEASE_NAME} to ${PREVIOUS_RELEASE_NAME}..."
+	ln -sfn "${PREVIOUS_RELEASE_DIR}" "${CURRENT_LINK}"
+
+	echo "Done."
+	echo "Rolled back: ${CURRENT_RELEASE_NAME} -> ${PREVIOUS_RELEASE_NAME}"
+	exit 0
+fi
+
 # ---- Deploy mode ----
 
 NEW_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
