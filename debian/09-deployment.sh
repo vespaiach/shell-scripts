@@ -113,4 +113,25 @@ if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	exit 1
 fi
 
-echo "Arguments OK. ROLLBACK=${ROLLBACK} TARGET_DIR=${TARGET_DIR} KEEP_RELEASES=${KEEP_RELEASES}"
+# ---- Deploy mode ----
+
+NEW_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
+
+echo "Deploying branch '${BRANCH}' to ${NEW_RELEASE_DIR}..."
+git clone --branch "${BRANCH}" --single-branch --depth 1 "${REPO}" "${NEW_RELEASE_DIR}"
+
+echo "Swapping current -> ${NEW_RELEASE_DIR}..."
+ln -sfn "${NEW_RELEASE_DIR}" "${CURRENT_LINK}"
+
+echo "Pruning releases beyond ${KEEP_RELEASES}..."
+mapfile -t OLD_RELEASES < <(find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -r | tail -n +$((KEEP_RELEASES + 1)))
+for old in "${OLD_RELEASES[@]}"; do
+	echo "Removing old release ${old}..."
+	rm -rf "${RELEASES_DIR:?}/${old}"
+done
+
+echo "Done."
+echo "Target: ${TARGET_DIR}"
+echo "Branch deployed: ${BRANCH}"
+echo "New release: ${NEW_RELEASE_DIR}"
+echo "Releases kept: ${KEEP_RELEASES}"
