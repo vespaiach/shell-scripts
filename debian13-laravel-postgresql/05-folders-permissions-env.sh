@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+#
+# Summary: Builds the atomic release/shared/current Laravel directory layout under
+#   /var/www/<site>, generates a shared .env from an inline template (fresh APP_KEY, DB
+#   placeholders) if one doesn't exist, symlinks storage/bootstrap-cache/.env into the release,
+#   and applies the full ownership/permission pass. If 'current' already points at a real
+#   release, adopts it and just reconverges .env/permissions instead of minting a new release.
+#   Standalone and re-runnable; never touches Postgres itself.
+# Input:   Interactive prompts for site name (validated hostname) and APP_NAME.
+# Output:  Directory tree, shared .env, and 'current' symlink under /var/www/<site>, plus a
+#          printed permission summary.
 
 set -euo pipefail
 

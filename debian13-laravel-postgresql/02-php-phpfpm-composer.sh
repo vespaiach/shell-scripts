@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+#
+# Summary: Installs PHP + PHP-FPM and common extensions from the Sury APT repository, installs
+#   Composer via its signature-verified installer, and applies production PHP-FPM limits
+#   (memory/upload sizes) and pool tuning (dynamic process manager sizing).
+# Input:   Optional positional arg <php-version>, defaults to 8.5. Requires 'gpg' to be present
+#          (installed by 01-packages-deployer-ssh.sh).
+# Output:  php<version>-fpm running and active with a verified socket, Composer on PATH, and
+#          /etc/php/<version>/fpm/conf.d/99-production-limits.ini +
+#          .../pool.d/99-www-production-pm.conf written.
 
 set -euo pipefail
 

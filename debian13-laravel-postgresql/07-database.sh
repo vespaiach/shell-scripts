@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+#
+# Summary: Provisions (or updates) a Laravel PostgreSQL role and database. Creates the role if
+#   missing, unconditionally rotates its password on every run, creates the database if missing
+#   and enforces ownership, and enables the pgcrypto/pg_trgm extensions. Optionally rewrites the
+#   DB_* lines in a site's shared .env to match. Standalone and re-runnable, with no dependency
+#   on any other script (e.g. usable purely to rotate the role's password).
+# Input:   Interactive prompts for DB name, DB username (both validated SQL identifiers), DB
+#          password (hidden input), and an optional site name (validated hostname; blank skips
+#          .env sync).
+# Output:  A PostgreSQL role + database with pgcrypto/pg_trgm enabled. If a site name was given
+#          and its shared/.env exists, DB_CONNECTION/HOST/PORT/DATABASE/USERNAME/PASSWORD are
+#          synced into it.
 
 set -euo pipefail
 

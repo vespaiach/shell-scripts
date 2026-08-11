@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-
+#
+# Summary: Installs Nginx. No-ops if already installed. If port 80 is held by Apache, stops
+#   Apache first; if held by anything else, fails with diagnostics rather than guessing.
+# Input:   None.
+# Output:  Nginx installed, enabled, and active on port 80.
 
 set -euo pipefail
 

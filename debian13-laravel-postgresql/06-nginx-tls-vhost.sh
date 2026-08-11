@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+#
+# Summary: Writes the site's Nginx vhost and issues a Let's Encrypt/certbot TLS certificate.
+#   First writes an HTTP-only vhost (for the ACME challenge), requests the certificate via
+#   certbot webroot, then rewrites the vhost again with a full HTTPS server block (TLS 1.2/1.3,
+#   security headers, static-asset caching, PHP-FPM fastcgi_pass), and finally verifies certbot
+#   auto-renewal. Standalone and re-runnable; hard precondition is that
+#   05-folders-permissions-env.sh has already run (current/public must exist).
+# Input:   Interactive prompts for site name, Nginx server name (default: site name), Let's
+#          Encrypt domain (default: site name, validated hostname), and an email for Let's
+#          Encrypt notices.
+# Output:  /etc/nginx/sites-available/<site>.conf (enabled) serving TLS traffic, plus a live
+#          certificate under /etc/letsencrypt/live/<domain>. Exits non-zero if renewal could
+#          not be verified, even though setup itself completed.
 
 set -euo pipefail
 

@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#
+# Summary: Installs PostgreSQL 18 from the PGDG APT repository, switches localhost TCP auth in
+#   pg_hba.conf to scram-sha-256, and applies conservative production tuning sized for a small
+#   VPS (1 vCPU / 4GB RAM: shared_buffers, max_connections, autovacuum, pg_stat_statements, ...).
+# Input:   None.
+# Output:  PostgreSQL 18 running with scram-sha-256 local auth and
+#          /etc/postgresql/18/main/conf.d/99-production-tuning.conf applied; verified via
+#          pg_isready.
 
 set -euo pipefail
 

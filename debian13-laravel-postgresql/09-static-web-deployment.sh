@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+#
+# Summary: Generic, framework-agnostic deploy script (no composer/npm/artisan steps, no shared-
+#   file symlinking, no ownership handling). Clones the given branch into a new timestamped
+#   release under <dir>/releases, requires a dist/ subdirectory to exist in the clone (fails
+#   without swapping if not), swaps <dir>/current to that dist/ dir, and prunes releases beyond
+#   --keep. It deploys, it does not provision -- <dir>/releases must already exist.
+# Input:   --repo, --branch, --dir (all required unless --rollback), --keep N (default 5); or
+#          --rollback --dir <path> to flip 'current' back to the dist/ of the release
+#          immediately older than the one it points at now.
+# Output:  <dir>/current symlinked to a freshly cloned release's dist/ directory, with old
+#          releases pruned.
 
 set -euo pipefail
 

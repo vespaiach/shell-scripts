@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+#
+# Summary: Installs base packages (curl, git, gpg, certbot, python3-certbot-nginx) and creates
+#   the 'deployer' user with passwordless sudo and SSH-key-only access. Idempotent: detects an
+#   existing user, sudoers drop-in, and authorized key before changing anything.
+# Input:   DEPLOYER_SSH_KEY env var, or an SSH public key pasted at an interactive prompt.
+# Output:  A 'deployer' system user with passwordless sudo (/etc/sudoers.d/90-deployer) and one
+#          authorized SSH key in ~deployer/.ssh/authorized_keys.
 
 set -euo pipefail
 

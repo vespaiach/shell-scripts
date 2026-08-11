@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+#
+# Summary: Generates a standalone, re-runnable deploy.sh into /var/www/<site>/deploy.sh; this
+#   script itself does not deploy anything. The generated deploy.sh (run as 'deployer') clones a
+#   branch over SSH into a new timestamped release, symlinks storage/bootstrap-cache into the
+#   shared tree, runs composer install, php artisan migrate --force, npm ci && npm run build
+#   when package.json is present, caches config/routes/views, swaps 'current', reloads PHP-FPM,
+#   and prunes releases beyond --keep. It never touches .env. 'deploy.sh --rollback' just flips
+#   'current' to the previous release (no migration rollback, no .env revert).
+# Input:   --repo <git@...ssh-url> (required, validated SSH GitHub-style URL), --keep N
+#          (optional, default 5); interactive prompt for site name (validated hostname).
+#          Requires the releases/shared layout 05-folders-permissions-env.sh already created.
+# Output:  An installed, executable /var/www/<site>/deploy.sh (mode 750, deployer:deployer).
 
 set -euo pipefail
 
