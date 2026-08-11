@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 #
-# Summary: Installs base packages (curl, git, gpg, certbot, python3-certbot-nginx) and creates
-#   the 'deployer' user with passwordless sudo and SSH-key-only access. Idempotent: detects an
-#   existing user, sudoers drop-in, and authorized key before changing anything.
-# Input:   DEPLOYER_SSH_KEY env var, or an SSH public key pasted at an interactive prompt.
-# Output:  A 'deployer' system user with passwordless sudo (/etc/sudoers.d/90-deployer) and one
-#          authorized SSH key in ~deployer/.ssh/authorized_keys.
+# Summary: Installs base packages (curl, git, gpg, ca-certificates, lsb-release, certbot,
+#   python3-certbot-nginx), creates the 'deployer' user if missing, adds it to the 'sudo' group,
+#   and (re)installs a validated passwordless-sudo drop-in. Authorizes one SSH public key for
+#   login access (skipping the append if that exact key is already present), then generates a
+#   fresh ed25519 keypair for 'deployer' to use as a GitHub deploy key -- this step is NOT
+#   idempotent: an existing keypair is deleted and regenerated on every run, invalidating any
+#   repository access that trusted the old public key until the new one is re-added to GitHub.
+#   Requires /etc/sudoers to include /etc/sudoers.d, or it refuses to write a drop-in that would
+#   be ignored.
+# Input:   DEPLOYER_SSH_KEY env var, or a login SSH public key pasted at an interactive prompt
+#          (fails if stdin isn't a terminal and the env var is unset).
+# Output:  A 'deployer' system user in the 'sudo' group, with a passwordless sudoers drop-in
+#          (/etc/sudoers.d/90-deployer), the given SSH key authorized in
+#          ~deployer/.ssh/authorized_keys, and a new GitHub deploy keypair at
+#          ~deployer/.ssh/id_ed25519[.pub] (public key printed to stdout for adding to GitHub).
 
 set -euo pipefail
 
