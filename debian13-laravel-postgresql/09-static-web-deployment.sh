@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
 
-# Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
 
-# ****************************************************************************************************
-# Generic, standalone deploy script: clones a branch from GitHub into a new
-# timestamped release under <dir>/releases, swaps <dir>/current onto that
-# release's dist/ subdirectory, and prunes releases beyond --keep. --rollback
-# flips current back to the dist/ subdirectory of the release immediately
-# older than the one it points at now. Unlike 08-laravel-deployment.sh, this
-# script has no framework-specific steps (no composer/npm/artisan), no
-# shared-file symlinking, and no user/ownership handling -- it only clones
-# and swaps a symlink. <dir>/releases must already exist; this script
-# deploys, it does not provision.
-# ****************************************************************************************************
 
 usage() {
 	cat <<EOF
@@ -72,7 +60,6 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# ---- Validate arguments ----
 
 if [[ -z "${TARGET_DIR}" ]]; then
 	echo "--dir is required." >&2
@@ -99,7 +86,6 @@ if [[ "${ROLLBACK}" -eq 0 ]]; then
 	fi
 fi
 
-# ---- Derive paths and validate target layout ----
 
 RELEASES_DIR="${TARGET_DIR}/releases"
 CURRENT_LINK="${TARGET_DIR}/current"
@@ -115,7 +101,6 @@ if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	exit 1
 fi
 
-# ---- Rollback mode ----
 
 if [[ "${ROLLBACK}" -eq 1 ]]; then
 	if [[ ! -L "${CURRENT_LINK}" ]]; then
@@ -150,7 +135,6 @@ if [[ "${ROLLBACK}" -eq 1 ]]; then
 	exit 0
 fi
 
-# ---- Deploy mode ----
 
 NEW_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
 

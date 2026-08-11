@@ -1,32 +1,8 @@
 #!/usr/bin/env bash
 
-# Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
 
-# ****************************************************************************************************
-# Own the site's Nginx vhost and Let's Encrypt/certbot TLS issuance as a
-# standalone, re-runnable step, separate from directory-structure provisioning
-# (05-folder-structure.sh) and database provisioning (05-postgresql-database.sh).
-#
-# Run this script from inside the site's base directory (/var/www/<site>),
-# matching the convention 08-laravel-deployment.sh uses. The operator types
-# the site name at a prompt; it is used as-is, with no default and no
-# format validation.
-#
-# Standalone and re-runnable: no dependency on 05-postgresql-database.sh having
-# run, and it never touches Postgres. It does depend on 05-folder-structure.sh
-# having already created ${BASE_DIR}/current/public -- checked below rather
-# than assumed, since a vhost pointed at a webroot that doesn't exist yet would
-# only fail later, deep into the certbot request, with a much less obvious
-# error. Vhost files are always fully rewritten via temp-file-then-move and
-# certbot itself is idempotent, so re-running this script alone is how you
-# change the server name, redo the renewal verification, or recover from a
-# manually broken vhost.
-# ****************************************************************************************************
 
-# Every operation below needs elevation, so fail before prompting for
-# anything if sudo is unavailable. Only sudo capability is required -- no
-# check on which user is running this script.
 if ! command -v sudo >/dev/null 2>&1; then
 	echo "sudo is required but not installed." >&2
 	exit 1
@@ -41,13 +17,11 @@ if ! sudo -n true 2>/dev/null; then
 	fi
 fi
 
-# Nginx must already be installed and usable because this script writes and enables site config.
 if ! sudo nginx -t >/dev/null 2>&1; then
 	echo "nginx is not installed or configuration test failed." >&2
 	exit 1
 fi
 
-# Certbot is required for obtaining the certificate via webroot challenge.
 if ! command -v certbot >/dev/null 2>&1; then
 	echo "certbot is required for Let's Encrypt webroot setup but is not installed." >&2
 	exit 1
@@ -56,16 +30,10 @@ fi
 echo "Reminder: configure your domain DNS record(s) before running this setup."
 echo "Point A/AAAA records to this server first, or Let's Encrypt validation can fail."
 
-# Validate a value used as both a hostname and a path segment: LE_DOMAIN,
-# which becomes /etc/letsencrypt/live/${LE_DOMAIN}. SITE_NAME is not run
-# through this check -- it is used as typed, unvalidated, in
-# /etc/nginx/sites-available/${SITE_NAME}.conf and
-# /etc/nginx/sites-enabled/${SITE_NAME}.conf.
 is_valid_hostname() {
 	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 
-# ---- Collect remaining input ----
 
 read -r -p "Site name (e.g., app.mysite.com): " SITE_NAME
 
@@ -73,7 +41,6 @@ BASE_DIR="/var/www/${SITE_NAME}"
 CURRENT_LINK="${BASE_DIR}/current"
 SHARED_DIR="${BASE_DIR}/shared"
 
-# Allow distinct HTTP server_name and certificate domain when needed.
 read -r -p "Server name for Nginx (default: ${SITE_NAME}): " SERVER_NAME
 SERVER_NAME="${SERVER_NAME:-$SITE_NAME}"
 
@@ -92,12 +59,7 @@ if [[ -z "${LE_EMAIL}" ]]; then
 	exit 1
 fi
 
-# ---- Check the one hard ordering dependency ----
 
-# The webroot this vhost roots at, and that certbot serves the ACME challenge
-# from, must already exist. Fail here with an actionable message rather than
-# writing a vhost that points at nothing and letting the certbot request fail
-# with a confusing error further down.
 if [[ ! -d "${CURRENT_LINK}/public" ]]; then
 	echo "${CURRENT_LINK}/public does not exist." >&2
 	echo "Run 05-folder-structure.sh for '${SITE_NAME}' first, then re-run this script." >&2
@@ -108,16 +70,11 @@ NGINX_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}.conf"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
 PHP_FPM_SOCK="/run/php/php8.5-fpm.sock"
 
-# This vhost serves certbot's HTTP-01 challenge, so the certificate domain must
-# be a name Nginx routes here -- otherwise the ACME request falls through to the
-# default server and validation 404s. It is also the name the issued certificate
-# is valid for, so it has to be served by the HTTPS block as well.
 SERVER_NAMES="${SERVER_NAME}"
 if [[ "${LE_DOMAIN}" != "${SERVER_NAME}" ]]; then
 	SERVER_NAMES="${SERVER_NAME} ${LE_DOMAIN}"
 fi
 
-# Prefer expected PHP-FPM socket; fall back to first detected socket on system.
 if [[ ! -S "${PHP_FPM_SOCK}" ]]; then
 	DETECTED_SOCK="$(find /run/php -maxdepth 1 -type s -name 'php*-fpm.sock' 2>/dev/null | head -n 1 || true)"
 	if [[ -n "${DETECTED_SOCK}" ]]; then
@@ -130,10 +87,8 @@ if [[ ! -S "${PHP_FPM_SOCK}" ]]; then
 	echo "Nginx config will use ${PHP_FPM_SOCK}. Adjust it if needed."
 fi
 
-# ---- Write HTTP-only vhost, enable it, request the certificate ----
 
 echo "Writing Nginx config: ${NGINX_AVAILABLE}"
-# Write through a temp file first, then atomically replace destination.
 TMP_NGINX_CONFIG="$(mktemp)"
 cat > "${TMP_NGINX_CONFIG}" <<EOF
 server {
@@ -158,22 +113,17 @@ server {
 }
 EOF
 
-# Enable site by linking from sites-available into sites-enabled. mktemp creates
-# the file 0600, which survives the move -- reset it to the 0644 convention so
-# the vhost is readable to an admin inspecting sites-available as a normal user.
 sudo mv "${TMP_NGINX_CONFIG}" "${NGINX_AVAILABLE}"
 sudo chmod 644 "${NGINX_AVAILABLE}"
 sudo ln -sfn "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
 
 echo "Testing Nginx configuration..."
-# Validate config before any reload to avoid taking down existing traffic.
 sudo nginx -t
 
 echo "Reloading Nginx..."
 sudo systemctl reload nginx
 
 echo "Requesting Let's Encrypt certificate for ${LE_DOMAIN} using webroot..."
-# Webroot mode proves domain control using HTTP challenge files under current/public.
 sudo certbot certonly \
 	--webroot \
 	-w "${CURRENT_LINK}/public" \
@@ -182,10 +132,8 @@ sudo certbot certonly \
 	--agree-tos \
 	--non-interactive
 
-# ---- Rewrite the vhost as HTTP+HTTPS now that the certificate exists ----
 
 echo "Writing HTTPS-enabled Nginx config: ${NGINX_AVAILABLE}"
-# Replace the HTTP-only config with a dual-server HTTP+HTTPS configuration.
 TMP_NGINX_SSL_CONFIG="$(mktemp)"
 cat > "${TMP_NGINX_SSL_CONFIG}" <<EOF
 server {
@@ -253,10 +201,6 @@ server {
 		return 404;
 	}
 
-	# Cache static assets aggressively; deploys are content-addressed by release path.
-	# Nginx stops inheriting the server-level add_header directives as soon as a
-	# location defines one of its own, so the security headers are repeated here
-	# or static assets would be served without them.
 	location ~* \.(?:css|js|jpg|jpeg|gif|png|webp|svg|ico|ttf|otf|woff|woff2)$ {
 		expires 7d;
 		access_log off;
@@ -266,7 +210,6 @@ server {
 		add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 	}
 
-	# Block access to hidden files except the ACME challenge directory.
 	location ~ /\.(?!well-known).* {
 		deny all;
 	}
@@ -282,15 +225,8 @@ sudo nginx -t
 echo "Reloading Nginx with SSL..."
 sudo systemctl reload nginx
 
-# ---- Verify auto-renewal ----
 
 echo "Verifying Let's Encrypt auto-renewal..."
-# Debian's certbot package manages renewal via a systemd timer, not cron --
-# a cert nobody renews will silently expire in 90 days, so this still fails the
-# run loudly. It records the failure rather than exiting here, though: renewal
-# verification is orthogonal to the vhost already being live, and aborting
-# mid-check would drop the certbot.timer result on the floor. The recorded
-# result is reported and exited on at the very end.
 RENEWAL_VERIFIED=1
 
 if ! systemctl is-enabled --quiet certbot.timer; then
@@ -300,14 +236,11 @@ if ! systemctl is-enabled --quiet certbot.timer; then
 fi
 
 echo "Running a renewal dry run for ${LE_DOMAIN}..."
-# Proves the renewal would actually succeed right now (webroot path, vhost,
-# and cert are all still valid) rather than just confirming a schedule exists.
 if ! sudo certbot renew --dry-run --cert-name "${LE_DOMAIN}"; then
 	echo "Warning: renewal dry run failed for ${LE_DOMAIN}."
 	RENEWAL_VERIFIED=0
 fi
 
-# ---- Final summary ----
 
 echo "Done."
 echo "Site: ${SITE_NAME}"
@@ -316,9 +249,6 @@ echo "Let's Encrypt domain: ${LE_DOMAIN}"
 echo "Nginx vhost: ${NGINX_AVAILABLE}"
 echo "PHP-FPM socket: ${PHP_FPM_SOCK}"
 
-# The site is fully provisioned either way, but an unverified renewal path
-# means the certificate silently expires in 90 days, so this still exits
-# non-zero.
 if [[ "${RENEWAL_VERIFIED}" -ne 1 ]]; then
 	echo
 	echo "Setup completed, but Let's Encrypt auto-renewal could not be verified."

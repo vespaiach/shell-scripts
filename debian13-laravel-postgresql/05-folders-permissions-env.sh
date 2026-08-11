@@ -1,24 +1,8 @@
 #!/usr/bin/env bash
 
-# Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
 
-# ****************************************************************************************************
-# Create the atomic release/shared/current directory layout, the Laravel-specific
-# storage/bootstrap-cache structure, the shared .env file, and the full
-# permission model for a site.
-#
-# Standalone and re-runnable: no dependency on nginx-tls-setup.sh or
-# database-setup.sh having run, and this script never touches Postgres itself.
-# Re-running against a site that already has a live deployment adopts the
-# release current/ points at instead of minting a new one or refusing to run,
-# then re-applies the permission pass -- so repeated runs converge on the same
-# result rather than failing or duplicating state.
-# ****************************************************************************************************
 
-# Every operation below needs elevation, so fail before prompting for
-# anything if sudo is unavailable. Only sudo capability is required -- no
-# check on which user is running this script.
 if ! command -v sudo >/dev/null 2>&1; then
 	echo "sudo is required but not installed." >&2
 	exit 1
@@ -35,39 +19,22 @@ fi
 
 WEB_GROUP="www-data"
 
-# Web server group must exist so deployed files can be shared with Nginx/PHP-FPM.
 if ! getent group "${WEB_GROUP}" >/dev/null 2>&1; then
 	echo "Required group '${WEB_GROUP}' does not exist." >&2
 	echo "Create it or update WEB_GROUP in this script." >&2
 	exit 1
 fi
 
-# APP_KEY generation below needs openssl.
 if ! command -v openssl >/dev/null 2>&1; then
 	echo "openssl is required to generate APP_KEY but is not installed." >&2
 	exit 1
 fi
 
-# Validate a value that is used as both a hostname and a path segment.
-#
-# A plain "letters, numbers, dots, and hyphens" character check is not enough
-# here: '.' and '..' consist entirely of allowed characters, so they pass it,
-# and BASE_DIR then resolves to /var/www or /var rather than to a site
-# directory. That aims the unconditional 'chown -R' and 'find -exec chmod'
-# pass at the bottom of this script at every other site on the host, or at
-# the whole /var tree -- re-owning /var/lib/postgresql and friends to
-# deployer:www-data. Requiring real hostname labels (alphanumeric at both
-# ends, hyphens only inside, joined by single dots) rejects '.', '..', and a
-# leading '-' that could otherwise be read as an option by a later command.
 is_valid_hostname() {
 	[[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$ ]]
 }
 
-# ---- Collect input ----
 
-# Primary site identifier used for the directory layout. Also doubles as the
-# domain APP_URL is derived from, since this is expected to be the site's
-# hostname (example: app.mysite.com).
 read -r -p "Site name (example: app.mysite.com): " SITE_NAME
 
 if [[ -z "${SITE_NAME}" ]]; then
@@ -80,7 +47,6 @@ if ! is_valid_hostname "${SITE_NAME}"; then
 	exit 1
 fi
 
-# Only used to seed .env on first creation; ignored on reruns.
 read -r -p "Application name (APP_NAME): " APP_NAME
 
 if [[ -z "${APP_NAME}" ]]; then
@@ -88,7 +54,6 @@ if [[ -z "${APP_NAME}" ]]; then
 	exit 1
 fi
 
-# ---- Derive paths ----
 
 BASE_DIR="/var/www/${SITE_NAME}"
 RELEASES_DIR="${BASE_DIR}/releases"
@@ -98,32 +63,18 @@ SHARED_STORAGE_DIR="${SHARED_DIR}/storage"
 SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
 SHARED_ENV_FILE="${SHARED_DIR}/.env"
 
-# ---- Derive .env values ----
 
-# APP_URL is derived from the site name rather than asked separately -- it's
-# already the domain this site is served on.
 APP_URL="https://${SITE_NAME}"
 
-# Laravel's own APP_KEY format: base64: followed by a base64-encoded
-# 32-byte key, the same shape `php artisan key:generate` produces.
 APP_KEY="base64:$(openssl rand -base64 32)"
 
-# ---- Create, or adopt, the release structure ----
 
-# A non-symlink at current/ is not a layout this script can safely converge:
-# 'ln -sfn' does not overwrite a real directory, it silently creates the link
-# *inside* it, leaving current/ still not pointing at a release.
 if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	echo "${CURRENT_LINK} exists but is not a symlink." >&2
 	echo "Move it aside before running this script." >&2
 	exit 1
 fi
 
-# Re-running against a site that already has a live deployment must not mint an
-# orphan release directory or repoint current/. Adopt whatever current/
-# resolves to instead, so the permission pass below applies to the release
-# actually being served. A dangling current/ counts as no deployment and is
-# repointed below like a fresh site.
 if [[ -L "${CURRENT_LINK}" && -d "${CURRENT_LINK}" ]]; then
 	ADOPTED_EXISTING_RELEASE=1
 	ACTIVE_RELEASE_DIR="$(cd "${CURRENT_LINK}" && pwd -P)"
@@ -134,8 +85,6 @@ else
 fi
 
 echo "Creating atomic deployment structure in ${BASE_DIR}..."
-# mkdir -p is a no-op on directories that already exist, so this converges
-# whether or not the release was just adopted.
 sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_DIR}/logs" \
 				 "${SHARED_STORAGE_DIR}/app" \
@@ -146,12 +95,6 @@ sudo mkdir -p "${RELEASES_DIR}" \
 				 "${SHARED_BOOTSTRAP_CACHE_DIR}" \
 				 "${ACTIVE_RELEASE_DIR}/public"
 
-# Seed the shared .env with a bare template on first creation only -- an
-# existing .env may already hold real secrets from a prior run, so a rerun
-# must never overwrite its content. APP_NAME, APP_KEY, APP_URL, and DB_HOST
-# are filled in below; the remaining placeholders (e.g. {{DB_DATABASE}},
-# {{MAIL_HOST}}) are left for later scripts (07-database.sh, etc.) or the
-# deployer to fill in by hand.
 if [[ ! -e "${SHARED_ENV_FILE}" ]]; then
 	ENV_TEMPLATE_CONTENT="$(cat <<'ENV_TEMPLATE'
 APP_NAME={{APP_NAME}}
@@ -220,11 +163,6 @@ VITE_APP_NAME="${APP_NAME}"
 ENV_TEMPLATE
 )"
 
-	# Only the four placeholders resolved above are substituted here; every
-	# other line, including remaining {{...}} placeholders, comments, and
-	# blank lines, passes through unchanged. Values come in via ENVIRON
-	# rather than awk -v so no escaping is needed for whatever characters
-	# end up in APP_NAME or APP_KEY.
 	APP_NAME="${APP_NAME}" \
 	APP_KEY="${APP_KEY}" \
 	APP_URL="${APP_URL}" \
@@ -250,31 +188,19 @@ fi
 sudo chmod 640 "${SHARED_ENV_FILE}"
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
 
-# Point current/ at this run's release and wire its release-local paths to the
-# shared tree. Skipped entirely when an existing deployment was adopted: that
-# release is live and already wired, and blindly re-linking over a real
-# directory would nest the symlink inside it rather than replace it.
 if [[ "${ADOPTED_EXISTING_RELEASE}" -eq 0 ]]; then
 	sudo ln -sfn "${ACTIVE_RELEASE_DIR}" "${CURRENT_LINK}"
 
-	# Bootstrap tree is commonly expected by Laravel for cache symlink target.
 	sudo mkdir -p "${ACTIVE_RELEASE_DIR}/bootstrap"
 
-	# Link release-local paths to persistent shared targets.
 	sudo ln -sfn "${SHARED_STORAGE_DIR}" "${ACTIVE_RELEASE_DIR}/storage"
 	sudo ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${ACTIVE_RELEASE_DIR}/bootstrap/cache"
 	sudo ln -sfn "${SHARED_ENV_FILE}" "${ACTIVE_RELEASE_DIR}/.env"
 fi
 
-# ---- Final permission pass ----
-# The authoritative permission pass, run last and unconditionally so a rerun
-# catches any drift: core structural perms for Nginx/PHP-FPM to traverse and
-# read the release tree, plus the Laravel runtime perms (setgid so new files
-# inherit the web group) on the shared writable paths.
 
 echo "Performing final permission check and update..."
 
-# Re-assert ownership across the entire deployment tree in case anything drifted.
 sudo chown -R deployer:"${WEB_GROUP}" "${BASE_DIR}"
 
 sudo chmod 755 "${BASE_DIR}" "${RELEASES_DIR}" "${SHARED_DIR}"
@@ -287,10 +213,8 @@ sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type d -exec chmod 2775 {} \;
 sudo find "${SHARED_BOOTSTRAP_CACHE_DIR}" -type f -exec chmod 664 {} \;
 sudo chmod 2775 "${SHARED_DIR}/logs" "${SHARED_STORAGE_DIR}" "${SHARED_BOOTSTRAP_CACHE_DIR}"
 
-# .env may hold secrets -- keep it owner/group readable only.
 sudo chmod 640 "${SHARED_ENV_FILE}"
 
-# Final setup summary for quick verification and handoff notes.
 echo "Done."
 echo "Site: ${SITE_NAME}"
 echo "Base directory: ${BASE_DIR}"

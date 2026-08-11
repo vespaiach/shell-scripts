@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
 
-# Install and start Nginx on Debian when it is not already installed. Before
-# installation, ensure port 80 is available by stopping Apache when necessary,
-# then verify that the Nginx service is running.
 
-# Exit immediately on command errors and treat unset variables as errors.
 set -euo pipefail
 
-# Stop before performing any setup when Nginx is already installed.
 if [[ "$(dpkg-query --show --showformat='${Status}' nginx 2>/dev/null || true)" == "install ok installed" ]]; then
 	echo "Nginx is already installed. Nothing to do."
 	exit 0
 fi
 
-# Every operation in this script needs elevation, so fail before touching
-# anything if sudo is unavailable.
 if ! command -v sudo >/dev/null 2>&1; then
 	echo "sudo is required but not installed." >&2
 	exit 1
@@ -29,7 +22,6 @@ port_80_is_in_use() {
 	sudo ss --no-header --listening --tcp --numeric 'sport = :80' | grep --quiet .
 }
 
-# Apache commonly occupies port 80 on Debian. Stop it before installing Nginx.
 if port_80_is_in_use; then
 	if sudo systemctl is-active --quiet apache2; then
 		echo "Port 80 is in use by Apache. Stopping Apache."
@@ -47,17 +39,11 @@ if port_80_is_in_use; then
 	fi
 fi
 
-# ****************************************************************************************************
-# Install Nginx web server.
-# ****************************************************************************************************
 
-# Install Nginx web server.
 sudo apt install -y nginx
 
-# Enable Nginx at boot and start it now.
 sudo systemctl enable --now nginx
 
-# Verify Nginx service is running.
 if systemctl is-active --quiet nginx; then
 	echo "Nginx is active."
 else
