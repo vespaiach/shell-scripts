@@ -106,3 +106,18 @@ else
 	echo "Passwordless sudo check failed for '${DEPLOYER_USER}'." >&2
 	exit 1
 fi
+
+echo "Generating a GitHub SSH keypair for '${DEPLOYER_USER}'..."
+
+GITHUB_SSH_KEY="${SSH_DIR}/id_ed25519"
+
+if sudo test -e "${GITHUB_SSH_KEY}" || sudo test -e "${GITHUB_SSH_KEY}.pub"; then
+	echo "'${GITHUB_SSH_KEY}' already exists and is about to be replaced." >&2
+	echo "Any repository trusting the old key will lose GitHub access until the new public key below is added to GitHub." >&2
+	sudo rm -f "${GITHUB_SSH_KEY}" "${GITHUB_SSH_KEY}.pub"
+fi
+
+sudo -u "${DEPLOYER_USER}" ssh-keygen -t ed25519 -f "${GITHUB_SSH_KEY}" -N "" -C "${DEPLOYER_USER}@$(hostname)"
+
+echo "Add the following public key to GitHub (as a repository Deploy Key or under a machine account) so '${DEPLOYER_USER}' can clone over SSH:"
+sudo cat "${GITHUB_SSH_KEY}.pub"
