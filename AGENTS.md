@@ -29,29 +29,31 @@ host + site setup:
   permission pass; the only hard stop left is `current` existing as something other than a symlink, which
   has to be moved aside by hand.
 - `06-nginx-tls-vhost.sh` owns the site's Nginx vhost and Let's Encrypt/certbot TLS issuance -- also
-  standalone and re-runnable, with no dependency on `07-database.sh` having run. Run it from inside the
-  site's base directory (`/var/www/<site>`); it prompts for the site name and uses it as typed, with no
-  default and no format validation. Its one hard precondition is `05-folder-structure.sh` having already run
-  for the site: it exits immediately if `current/public` doesn't exist, rather than writing a vhost that
-  points at a webroot that isn't there. Vhost files are always fully rewritten via temp-file-then-move
-  (first HTTP-only for the ACME challenge, then rewritten again with the HTTPS server block once the
-  certificate exists) and certbot itself is idempotent, so it's safe to re-run to change the server name,
-  redo the renewal verification, or recover from a manually broken vhost.
+  standalone and re-runnable, with no dependency on `07-database.sh` having run. It prompts for the site
+  name and uses it as typed, with no default and no format validation; it does not depend on or check the
+  caller's current directory, so it can be run from anywhere. Its one hard precondition is
+  `05-folder-structure.sh` having already run for the site: it exits immediately if `current/public`
+  doesn't exist, rather than writing a vhost that points at a webroot that isn't there. Vhost files are
+  always fully rewritten via temp-file-then-move (first HTTP-only for the ACME challenge, then rewritten
+  again with the HTTPS server block once the certificate exists) and certbot itself is idempotent, so it's
+  safe to re-run to change the server name, redo the renewal verification, or recover from a manually
+  broken vhost.
 - `07-database.sh` owns Laravel PostgreSQL role/database/extension (`pgcrypto`, `pg_trgm`) provisioning as
   a standalone, re-runnable step -- usable on its own (e.g. purely to rotate the database password) with
   no dependency on any other script in this repo. Safe to re-run -- it unconditionally rotates the role's
   password on every run. Optionally takes a site name and, when given one, rewrites just the `DB_*` lines
   in that site's shared `.env` (written by `05-folder-structure.sh`) to match; leave it blank to update
   `.env` by hand instead.
-- `08-laravel-deployment.sh --repo <git@...>` [`--keep N`] generates a standalone, re-runnable `deploy.sh`
-  into the site's base directory (run this script from inside `/var/www/<site>`, matching
-  `06-nginx-tls-vhost.sh`'s convention -- the site is identified by the current directory, not a flag).
-  Requires the `releases`/`shared` layout `05-folder-structure.sh` already created. The generated
-  `deploy.sh` (run as `deployer`) clones a branch over SSH into a new timestamped release, symlinks
-  `.env`/`storage`/`bootstrap/cache` into the shared tree, runs `composer install`, `php artisan migrate
-  --force`, an `npm ci && npm run build` when `package.json` is present, caches config/routes/views, swaps
-  `current`, reloads PHP-FPM, and prunes releases beyond `--keep` (default 5). `deploy.sh --rollback` just
-  flips `current` to the previous release -- it runs no migration rollback and does not revert `.env`.
+- `08-laravel-deployment.sh --repo <git@...>` [`--keep N`] prompts for the site name, matching
+  `05-folder-structure.sh` and `06-nginx-tls-vhost.sh`'s convention -- it does not depend on the caller's
+  current directory -- and generates a standalone, re-runnable `deploy.sh` into that site's base directory
+  (`/var/www/<site name>`). Requires the `releases`/`shared` layout `05-folder-structure.sh` already
+  created for that site. The generated `deploy.sh` (run as `deployer`) clones a branch over SSH into a new
+  timestamped release, symlinks `.env`/`storage`/`bootstrap/cache` into the shared tree, runs `composer
+  install`, `php artisan migrate --force`, an `npm ci && npm run build` when `package.json` is present,
+  caches config/routes/views, swaps `current`, reloads PHP-FPM, and prunes releases beyond `--keep`
+  (default 5). `deploy.sh --rollback` just flips `current` to the previous release -- it runs no migration
+  rollback and does not revert `.env`.
 - `09-static-web-deployment.sh` is a standalone, generic deploy script -- unlike `08-laravel-deployment.sh`,
   it has no framework-specific steps (no composer/npm/artisan), no shared-file symlinking, and no
   user/ownership handling. Given `--repo`, `--branch`, and `--dir`, it clones the branch into a new

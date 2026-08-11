@@ -1,3 +1,38 @@
+# 08-laravel-deployment.sh site-name prompt Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make `08-laravel-deployment.sh` prompt for the site name (like `05-folder-structure.sh` and `06-nginx-tls-vhost.sh`) instead of deriving `BASE_DIR` from the caller's current directory, and correct the AGENTS.md documentation to match.
+
+**Architecture:** Single-file bash script edit (reorder the sudo preflight check, add a validated `SITE_NAME` prompt, derive `BASE_DIR` from it) plus a documentation edit to two AGENTS.md bullets. No new files, no test framework -- verification is `bash -n` + `shellcheck` + manual `--help` sanity check, per this repo's existing testing convention.
+
+**Tech Stack:** Bash (`set -euo pipefail`), `shellcheck`.
+
+## Global Constraints
+
+- Tabs for indentation, `"${VAR}"` quoting, uppercase snake case script-level variables (AGENTS.md Coding Style).
+- Every change must pass `bash -n` and `shellcheck` with no new findings (AGENTS.md Testing Guidelines / Build commands).
+- `--repo` (required) and `--keep` (optional, default 5) stay CLI flags -- do not convert to prompts.
+- `SITE_NAME` must be validated with the strict hostname check `05-folder-structure.sh` uses (non-empty, dot-separated labels of letters/numbers/inner hyphens) before it is used to build `BASE_DIR`.
+- The sudo-availability check must run after argument parsing (so `-h`/`--help` stays a zero-side-effect no-op) but before `--repo`/`--keep` value validation and before the `SITE_NAME` prompt.
+- Commit messages: short, imperative, sentence-case subjects (AGENTS.md Commit Guidelines).
+
+---
+
+### Task 1: Rewrite the input/validation flow in `08-laravel-deployment.sh`
+
+**Files:**
+- Modify: `debian13-laravel-postgresql/08-laravel-deployment.sh` (full-file rewrite -- the reordering touches nearly every section)
+
+**Interfaces:**
+- Consumes: nothing from other tasks.
+- Produces: nothing consumed by Task 2 (Task 2 only touches `AGENTS.md`); both tasks are independent and can be reviewed separately.
+
+- [ ] **Step 1: Write the new file content**
+
+Overwrite `debian13-laravel-postgresql/08-laravel-deployment.sh` with this exact content (tabs for indentation, matching the rest of the file):
+
+```bash
 #!/usr/bin/env bash
 
 # Exit immediately on command errors and treat unset variables as errors.
@@ -383,3 +418,120 @@ echo "Keep releases: ${KEEP_RELEASES}"
 echo "Deployment script: ${DEPLOY_SCRIPT_PATH}"
 echo "Run it as 'deployer': ${DEPLOY_SCRIPT_PATH} [branch]"
 echo "Roll back with: ${DEPLOY_SCRIPT_PATH} --rollback"
+```
+
+- [ ] **Step 2: Verify syntax**
+
+Run: `bash -n debian13-laravel-postgresql/08-laravel-deployment.sh`
+Expected: no output, exit code 0.
+
+- [ ] **Step 3: Verify no new shellcheck findings**
+
+Run: `shellcheck debian13-laravel-postgresql/08-laravel-deployment.sh`
+Expected: same result as running it against the pre-change version (clean, or only pre-existing findings that already existed before this task -- there should be none new, since the edit only reorders existing validated blocks and adds a hostname-regex check copied verbatim from `05-folder-structure.sh`, which itself passes shellcheck clean).
+
+- [ ] **Step 4: Sanity-check --help stays a no-op**
+
+Run: `bash debian13-laravel-postgresql/08-laravel-deployment.sh --help`
+Expected: prints the usage text (mentioning the site-name prompt and `/var/www/<site name>/deploy.sh`) and exits 0, without attempting any sudo check or prompting for input. Also run `bash debian13-laravel-postgresql/08-laravel-deployment.sh` (no args) and confirm it fails fast on the sudo check or the missing `--repo` check before ever reaching `read -r -p`, by observing the order of output/prompts.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add debian13-laravel-postgresql/08-laravel-deployment.sh
+git commit -m "Prompt for site name in 08-laravel-deployment.sh instead of deriving it from cwd"
+```
+
+---
+
+### Task 2: Update AGENTS.md to match the new 08 behavior, and fix the stale 06 claim
+
+**Files:**
+- Modify: `AGENTS.md:31-39` (06-nginx-tls-vhost.sh bullet)
+- Modify: `AGENTS.md:46-54` (08-laravel-deployment.sh bullet)
+
+**Interfaces:**
+- Consumes: nothing from Task 1 (pure documentation change; independent of the script edit landing first, though it describes Task 1's resulting behavior).
+- Produces: nothing consumed elsewhere.
+
+- [ ] **Step 1: Fix the 06-nginx-tls-vhost.sh bullet**
+
+In `AGENTS.md`, replace:
+
+```
+- `06-nginx-tls-vhost.sh` owns the site's Nginx vhost and Let's Encrypt/certbot TLS issuance -- also
+  standalone and re-runnable, with no dependency on `07-database.sh` having run. Run it from inside the
+  site's base directory (`/var/www/<site>`); it prompts for the site name and uses it as typed, with no
+  default and no format validation. Its one hard precondition is `05-folder-structure.sh` having already run
+  for the site: it exits immediately if `current/public` doesn't exist, rather than writing a vhost that
+  points at a webroot that isn't there. Vhost files are always fully rewritten via temp-file-then-move
+  (first HTTP-only for the ACME challenge, then rewritten again with the HTTPS server block once the
+  certificate exists) and certbot itself is idempotent, so it's safe to re-run to change the server name,
+  redo the renewal verification, or recover from a manually broken vhost.
+```
+
+with:
+
+```
+- `06-nginx-tls-vhost.sh` owns the site's Nginx vhost and Let's Encrypt/certbot TLS issuance -- also
+  standalone and re-runnable, with no dependency on `07-database.sh` having run. It prompts for the site
+  name and uses it as typed, with no default and no format validation; it does not depend on or check the
+  caller's current directory, so it can be run from anywhere. Its one hard precondition is
+  `05-folder-structure.sh` having already run for the site: it exits immediately if `current/public`
+  doesn't exist, rather than writing a vhost that points at a webroot that isn't there. Vhost files are
+  always fully rewritten via temp-file-then-move (first HTTP-only for the ACME challenge, then rewritten
+  again with the HTTPS server block once the certificate exists) and certbot itself is idempotent, so it's
+  safe to re-run to change the server name, redo the renewal verification, or recover from a manually
+  broken vhost.
+```
+
+- [ ] **Step 2: Fix the 08-laravel-deployment.sh bullet**
+
+In `AGENTS.md`, replace:
+
+```
+- `08-laravel-deployment.sh --repo <git@...>` [`--keep N`] generates a standalone, re-runnable `deploy.sh`
+  into the site's base directory (run this script from inside `/var/www/<site>`, matching
+  `06-nginx-tls-vhost.sh`'s convention -- the site is identified by the current directory, not a flag).
+  Requires the `releases`/`shared` layout `05-folder-structure.sh` already created. The generated
+  `deploy.sh` (run as `deployer`) clones a branch over SSH into a new timestamped release, symlinks
+  `.env`/`storage`/`bootstrap/cache` into the shared tree, runs `composer install`, `php artisan migrate
+  --force`, an `npm ci && npm run build` when `package.json` is present, caches config/routes/views, swaps
+  `current`, reloads PHP-FPM, and prunes releases beyond `--keep` (default 5). `deploy.sh --rollback` just
+  flips `current` to the previous release -- it runs no migration rollback and does not revert `.env`.
+```
+
+with:
+
+```
+- `08-laravel-deployment.sh --repo <git@...>` [`--keep N`] prompts for the site name, matching
+  `05-folder-structure.sh` and `06-nginx-tls-vhost.sh`'s convention -- it does not depend on the caller's
+  current directory -- and generates a standalone, re-runnable `deploy.sh` into that site's base directory
+  (`/var/www/<site name>`). Requires the `releases`/`shared` layout `05-folder-structure.sh` already
+  created for that site. The generated `deploy.sh` (run as `deployer`) clones a branch over SSH into a new
+  timestamped release, symlinks `.env`/`storage`/`bootstrap/cache` into the shared tree, runs `composer
+  install`, `php artisan migrate --force`, an `npm ci && npm run build` when `package.json` is present,
+  caches config/routes/views, swaps `current`, reloads PHP-FPM, and prunes releases beyond `--keep`
+  (default 5). `deploy.sh --rollback` just flips `current` to the previous release -- it runs no migration
+  rollback and does not revert `.env`.
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `git diff AGENTS.md`
+Expected: only the two bullets above changed; no other lines touched.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add AGENTS.md
+git commit -m "Correct AGENTS.md to describe 06/08's site-name prompt instead of cwd convention"
+```
+
+---
+
+## Self-Review Notes
+
+- **Spec coverage:** SITE_NAME prompt + validation (Task 1 Step 1), BASE_DIR from SITE_NAME (Task 1 Step 1), sudo-check reordering (Task 1 Step 1 + verified in Step 4), --repo/--keep unchanged (Task 1 Step 1, untouched blocks), usage/comment text updates (Task 1 Step 1), deploy.sh template header reword (Task 1 Step 1), error messages referencing SITE_NAME (Task 1 Step 1), AGENTS.md 08 bullet (Task 2 Step 2), AGENTS.md 06 stale-claim fix (Task 2 Step 1). All spec sections covered.
+- **Placeholder scan:** none found -- both tasks contain literal file content and literal old/new strings.
+- **Type consistency:** N/A (bash script, no typed interfaces between tasks; the two tasks are independent).
