@@ -219,14 +219,19 @@ SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
 SHARED_STORAGE_DIR="${SHARED_DIR}/storage"
 SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
-SHARED_ENV_FILE="${SHARED_DIR}/.env"
 WEB_GROUP="www-data"
 
-if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" || ! -s "${SHARED_ENV_FILE}" ]]; then
-	echo "${BASE_DIR} is missing the expected releases/shared/.env layout, or .env is empty." >&2
-	echo "Run 05-folder-structure.sh for this directory first, then populate ${SHARED_ENV_FILE} (APP_KEY, DB_*, etc.) before deploying." >&2
+if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
+	echo "${BASE_DIR} is missing the expected releases/shared layout." >&2
+	echo "Run 05-folder-structure.sh for this directory first, then re-run this script." >&2
 	exit 1
 fi
+
+# This script does not manage .env: it never removes or re-links it in the
+# new release, and this precondition does not check it either. Wire each new
+# release's .env (e.g. symlink it to shared/.env) and populate it by hand
+# before relying on composer install / migrate / artisan cache below --
+# they will fail on a release with no .env.
 
 # ---- Mode selection ----
 # Usage:
@@ -314,11 +319,12 @@ NEW_RELEASE_DIR="${RELEASES_DIR}/$(date +%Y%m%d%H%M%S)"
 echo "Deploying branch '${BRANCH}' to ${NEW_RELEASE_DIR}..."
 git clone --branch "${BRANCH}" --single-branch --depth 1 "${REPO_URL}" "${NEW_RELEASE_DIR}"
 
-# The clone may bring its own .env / storage / bootstrap/cache -- replace
-# them with links into the shared tree 05-folder-structure.sh already manages.
-rm -rf "${NEW_RELEASE_DIR}/.env" "${NEW_RELEASE_DIR}/storage" "${NEW_RELEASE_DIR}/bootstrap/cache"
+# The clone may bring its own storage / bootstrap/cache -- replace them with
+# links into the shared tree 05-folder-structure.sh already manages. .env is
+# deliberately left untouched here: this script does not remove or re-link
+# it, so wiring/updating .env for the new release is a manual step.
+rm -rf "${NEW_RELEASE_DIR}/storage" "${NEW_RELEASE_DIR}/bootstrap/cache"
 mkdir -p "${NEW_RELEASE_DIR}/bootstrap"
-ln -sfn "${SHARED_ENV_FILE}" "${NEW_RELEASE_DIR}/.env"
 ln -sfn "${SHARED_STORAGE_DIR}" "${NEW_RELEASE_DIR}/storage"
 ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${NEW_RELEASE_DIR}/bootstrap/cache"
 

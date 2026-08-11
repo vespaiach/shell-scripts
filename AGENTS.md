@@ -49,11 +49,12 @@ host + site setup:
   current directory -- and generates a standalone, re-runnable `deploy.sh` into that site's base directory
   (`/var/www/<site name>`). Requires the `releases`/`shared` layout `05-folder-structure.sh` already
   created for that site. The generated `deploy.sh` (run as `deployer`) clones a branch over SSH into a new
-  timestamped release, symlinks `.env`/`storage`/`bootstrap/cache` into the shared tree, runs `composer
-  install`, `php artisan migrate --force`, an `npm ci && npm run build` when `package.json` is present,
-  caches config/routes/views, swaps `current`, reloads PHP-FPM, and prunes releases beyond `--keep`
-  (default 5). `deploy.sh --rollback` just flips `current` to the previous release -- it runs no migration
-  rollback and does not revert `.env`.
+  timestamped release, symlinks `storage`/`bootstrap/cache` into the shared tree, runs `composer install`,
+  `php artisan migrate --force`, an `npm ci && npm run build` when `package.json` is present, caches
+  config/routes/views, swaps `current`, reloads PHP-FPM, and prunes releases beyond `--keep` (default 5).
+  It deliberately does not touch `.env` -- wiring/populating each new release's `.env` (e.g. symlinking it
+  to `shared/.env`) is a manual step the operator does before or after a deploy. `deploy.sh --rollback`
+  just flips `current` to the previous release -- it runs no migration rollback and does not revert `.env`.
 - `09-static-web-deployment.sh` is a standalone, generic deploy script -- unlike `08-laravel-deployment.sh`,
   it has no framework-specific steps (no composer/npm/artisan), no shared-file symlinking, and no
   user/ownership handling. Given `--repo`, `--branch`, and `--dir`, it clones the branch into a new
