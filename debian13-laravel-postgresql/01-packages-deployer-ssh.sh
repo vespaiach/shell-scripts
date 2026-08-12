@@ -24,7 +24,9 @@ if ! command -v sudo >/dev/null 2>&1; then
 fi
 
 sudo apt update
-sudo apt install -y curl git gpg ca-certificates lsb-release certbot python3-certbot-nginx
+sudo apt install -y curl git gpg ca-certificates lsb-release certbot python3-certbot-nginx 7z
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && \
+sudo apt install -y nodejs
 
 DEPLOYER_USER="deployer"
 
