@@ -2,11 +2,12 @@
 #
 # Summary: Generates a standalone, re-runnable deploy.sh into /var/www/<site>/deploy.sh; this
 #   script itself does not deploy anything. The generated deploy.sh (run as 'deployer') clones a
-#   branch over SSH into a new timestamped release, symlinks storage/bootstrap-cache into the
-#   shared tree, runs composer install, php artisan migrate --force, npm ci && npm run build
-#   when package.json is present, caches config/routes/views, swaps 'current', reloads PHP-FPM,
-#   and prunes releases beyond --keep. It never touches .env. 'deploy.sh --rollback' just flips
-#   'current' to the previous release (no migration rollback, no .env revert).
+#   branch over SSH into a new timestamped release, symlinks storage/bootstrap-cache/.env into the
+#   shared tree (failing fast if shared/.env is missing), runs composer install, php artisan
+#   migrate --force, npm ci && npm run build when package.json is present, caches
+#   config/routes/views, swaps 'current', reloads PHP-FPM, and prunes releases beyond --keep.
+#   'deploy.sh --rollback' just flips 'current' to the previous release (no migration rollback,
+#   no .env change -- both releases already share the same .env symlink).
 # Input:   --repo <git@...ssh-url> (required, validated SSH GitHub-style URL), --keep N
 #          (optional, default 5); interactive prompt for site name (validated hostname).
 #          Requires the releases/shared layout 05-folders-permissions-env.sh already created.
@@ -124,6 +125,12 @@ if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
 	exit 1
 fi
 
+if [[ ! -e "${SHARED_DIR}/.env" ]]; then
+	echo "${SHARED_DIR}/.env does not exist." >&2
+	echo "Run 05-folder-structure.sh for '${SITE_NAME}' first, then re-run this script." >&2
+	exit 1
+fi
+
 if [[ -e "${CURRENT_LINK}" && ! -L "${CURRENT_LINK}" ]]; then
 	echo "${CURRENT_LINK} exists but is not a symlink." >&2
 	echo "05-folder-structure.sh should have created it as one -- check ${BASE_DIR} manually." >&2
@@ -186,10 +193,17 @@ SHARED_DIR="${BASE_DIR}/shared"
 CURRENT_LINK="${BASE_DIR}/current"
 SHARED_STORAGE_DIR="${SHARED_DIR}/storage"
 SHARED_BOOTSTRAP_CACHE_DIR="${SHARED_DIR}/bootstrap/cache"
+SHARED_ENV_FILE="${SHARED_DIR}/.env"
 WEB_GROUP="www-data"
 
 if [[ ! -d "${RELEASES_DIR}" || ! -d "${SHARED_DIR}" ]]; then
 	echo "${BASE_DIR} is missing the expected releases/shared layout." >&2
+	echo "Run 05-folder-structure.sh for this directory first, then re-run this script." >&2
+	exit 1
+fi
+
+if [[ ! -e "${SHARED_ENV_FILE}" ]]; then
+	echo "${SHARED_ENV_FILE} does not exist." >&2
 	echo "Run 05-folder-structure.sh for this directory first, then re-run this script." >&2
 	exit 1
 fi
@@ -270,6 +284,7 @@ rm -rf "${NEW_RELEASE_DIR}/storage" "${NEW_RELEASE_DIR}/bootstrap/cache"
 mkdir -p "${NEW_RELEASE_DIR}/bootstrap"
 ln -sfn "${SHARED_STORAGE_DIR}" "${NEW_RELEASE_DIR}/storage"
 ln -sfn "${SHARED_BOOTSTRAP_CACHE_DIR}" "${NEW_RELEASE_DIR}/bootstrap/cache"
+ln -sfn "${SHARED_ENV_FILE}" "${NEW_RELEASE_DIR}/.env"
 
 echo "Installing Composer dependencies..."
 (cd "${NEW_RELEASE_DIR}" && composer install --no-dev --optimize-autoloader --no-interaction)
