@@ -48,13 +48,15 @@ host + site setup:
   `05-folder-structure.sh` and `06-nginx-tls-vhost.sh`'s convention -- it does not depend on the caller's
   current directory -- and generates a standalone, re-runnable `deploy.sh` into that site's base directory
   (`/var/www/<site name>`). Requires the `releases`/`shared` layout `05-folder-structure.sh` already
-  created for that site. The generated `deploy.sh` (run as `deployer`) clones a branch over SSH into a new
-  timestamped release, symlinks `storage`/`bootstrap/cache` into the shared tree, runs `composer install`,
-  `php artisan migrate --force`, an `npm ci && npm run build` when `package.json` is present, caches
-  config/routes/views, swaps `current`, reloads PHP-FPM, and prunes releases beyond `--keep` (default 5).
-  It deliberately does not touch `.env` -- wiring/populating each new release's `.env` (e.g. symlinking it
-  to `shared/.env`) is a manual step the operator does before or after a deploy. `deploy.sh --rollback`
-  just flips `current` to the previous release -- it runs no migration rollback and does not revert `.env`.
+  created for that site, including the shared `.env` file -- it fails fast if `shared/.env` doesn't exist
+  yet. The generated `deploy.sh` (run as `deployer`) clones a branch over SSH into a new timestamped
+  release, symlinks `storage`/`bootstrap/cache`/`.env` into the shared tree (re-checking `shared/.env`
+  exists first), runs `composer install`, `php artisan migrate --force`, an `npm ci && npm run build` when
+  `package.json` is present, caches config/routes/views, swaps `current`, reloads PHP-FPM, and prunes
+  releases beyond `--keep` (default 5). Every release always points at the one shared `.env`, so there is
+  no per-release `.env` to wire up by hand. `deploy.sh --rollback` just flips `current` to the previous
+  release -- it runs no migration rollback, and there's no `.env` to revert since both releases already
+  share the same symlink.
 - `09-static-web-deployment.sh` is a standalone, generic deploy script -- unlike `08-laravel-deployment.sh`,
   it has no framework-specific steps (no composer/npm/artisan), no shared-file symlinking, and no
   user/ownership handling. Given `--repo`, `--branch`, and `--dir`, it clones the branch into a new
